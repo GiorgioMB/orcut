@@ -8,11 +8,15 @@ estimated from the bin counts. Configurations (``flags`` of :func:`orcut._core.c
   +relays    + implications of whole blocks through hub vertices (relays)
   +twins     + merging of rows with identical patterns
   +fast      + one bipartite flow when no pair is at distance 3
-  full       + warm start of the two-layer cut (what ``orcut.curvature`` runs)
-  -relays, -twins, -fast   full without one step ("-warm" is "+fast")
+  +warm      + warm start of the two-layer cut
+  full       + witness relays for the remaining pairs at distance 2 when smaller (``orcut.curvature``)
+  -relays, -twins, -fast, -warm, -witness   full without one step (without relays there are no
+             witness relays either)
+  witness    the linear-size witness network alone (``orcut._witness``)
   oracle     explicit local distance matrix and three-level closure (``orcut._reference``,
              the previous implementation)
   pot        explicit local distance matrix (numba) and POT's network simplex (build included)
+  graphflow  min-cost flow on the local graph (Beckmann; OR-Tools), no distance matrix
 
 All orcut configurations return identical values (checked: ``value_mismatch``); for each, the mean
 number of nodes and arcs of the solved flow networks is reported.
@@ -31,9 +35,11 @@ from common import Rows, estimate_total, log, out_dir, stratified_bins, time_per
 import baselines as B
 import registry as R
 
-CONFIGS = {"cut": 0, "+relays": 2, "+twins": 3, "+fast": 7, "full": 15, "-relays": 13, "-twins": 14, "-fast": 11}
-# flags: F_TWINS = 1, F_RELAYS = 2, F_FAST = 4, F_WARM = 8 (orcut._core)
-ORDER = ["full", "cut", "+relays", "+twins", "+fast", "-relays", "-twins", "-fast", "oracle", "pot"]
+CONFIGS = {"cut": 0, "+relays": 2, "+twins": 3, "+fast": 7, "+warm": 15, "full": 31, "-relays": 29, "-twins": 30,
+           "-fast": 27, "-warm": 23, "-witness": 15}
+# flags: F_TWINS = 1, F_RELAYS = 2, F_FAST = 4, F_WARM = 8, F_WITNESS = 16 (orcut._core)
+ORDER = ["full", "cut", "+relays", "+twins", "+fast", "+warm", "-relays", "-twins", "-fast", "-warm", "-witness",
+         "witness", "oracle", "pot", "graphflow"]
 
 
 def main():
@@ -76,6 +82,23 @@ def main():
                 if base is None:
                     base = v
                 row["value_mismatch"] = int(np.sum(v != base))
+            elif cfg == "witness":
+                from orcut import _witness as WT
+
+                f = lambda sub: WT.witness_ids(g.indptr, g.indices, g.edges, sub, C.M_LAZY, nchunks=1)
+                times = [time_per_edge(f, s, reps=3, deadline=deadline) for _, s, _ in strata]
+                v, num, d = f(ids)
+                row.update(mean_nodes=float(np.mean(d[:, WT.WD_NODES])), mean_arcs=float(np.mean(d[:, WT.WD_ARCS])),
+                           max_arcs=int(np.max(d[:, WT.WD_ARCS])), mean_groups=float(np.mean(d[:, WT.WD_GROUPS])))
+                row["value_mismatch"] = int(np.sum(v != base)) if base is not None else 0
+            elif cfg == "graphflow":
+                times = []
+                for _, s, _ in strata:
+                    left = deadline - time.perf_counter()
+                    t = np.full(len(s), np.nan)
+                    if left > 0:
+                        B.run_graph_flow(g, s, "lazy", budget_s=left, times=t)
+                    times.append(t)
             elif cfg == "oracle":
                 f = lambda sub: RF.exact_ids_reference(g.indptr, g.indices, g.edges, sub, True, False, False, 1)
                 times = [time_per_edge(f, s, reps=1, deadline=deadline) for _, s, _ in strata]
@@ -93,8 +116,8 @@ def main():
             row.update(timed=timed, est_total_s=estimate_total(strata, times),
                        mean_sample_edge_s=float(np.nanmean(np.concatenate(times))))
             rows.add(row)
-            log(f"E4 {name:16s} {cfg:8s} est. {row['est_total_s']:10.2f}s single-threaded (timed {timed}/{len(ids)})"
-                + (f" arcs {row['mean_arcs']:9.1f}" if cfg in CONFIGS else ""))
+            log(f"E4 {name:16s} {cfg:9s} est. {row['est_total_s']:10.2f}s single-threaded (timed {timed}/{len(ids)})"
+                + (f" arcs {row['mean_arcs']:9.1f}" if "mean_arcs" in row else ""))
 
 
 if __name__ == "__main__":

@@ -6,9 +6,11 @@ minimum cut per edge, in exact integer arithmetic and without a distance matrix.
 Any two vertices of the closed neighbourhoods of an edge are at distance at most
 three, so the Kantorovich dual of the edgewise transport problem has an integral
 optimum with potentials in {0, 1, 2, 3}. Written in unary, it is a maximum-weight
-closure, solved by one s–t minimum cut on at most 2|P| + 2|N| + 6 nodes. The same
-holds for any one-step measures (lazy, non-lazy, any idleness, weighted walks), and,
-with 2r layers, for measures supported on balls of radius r.
+closure, solved by one s–t minimum cut. Its arcs come from adjacency and common
+neighbours only (pairs at distance three give none), and with one relay node per
+common neighbour the network is linear in the adjacency lists of the vertices that
+carry net mass. The same holds for any one-step measures (lazy, non-lazy, any idleness,
+weighted walks), and, with 2r layers, for measures supported on balls of radius r.
 
 ```python
 import orcut
@@ -35,11 +37,15 @@ pip install --no-index --no-deps --no-build-isolation -e .
 pytest -q
 ```
 
-With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.1.0"`, or
+With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.2.0"`, or
 `pip install -e ".[dev]"` from a clone.
 
 ## Versions
 
+* **1.2.0**: witness relays (one zero-weight relay per common neighbour) for the pairs at distance 2
+  that the bitset network would list one by one, chosen per edge when the network gets smaller; the
+  linear-size witness network on its own (`orcut._witness`); graph min-cost flow (Beckmann) as a
+  baseline in the experiments. Values unchanged (tested).
 * **1.1.0**: `orcut.curvature` (any one-step measure, exact fractions, diagnostics, ablation
   flags), certificates (`orcut.certify`), the layered closure for supports of radius r
   (`ball_curvature`, `walk_curvature`), exact incremental updates (`affected_edges`), and the
@@ -56,7 +62,8 @@ With pip and network access: `pip install "orcut @ git+https://github.com/Giorgi
 | --- | --- |
 | `orcut/graph.py` | CSR graph, canonical undirected edges, networkx / PyG / edge-list constructors |
 | `orcut/_kernels.py` | the 1.0.0 kernel (frozen): lazy, non-lazy, LLY, and the TLW certificate |
-| `orcut/_core.py` | the general one-step kernel: per-vertex masses, ablation flags, diagnostics |
+| `orcut/_core.py` | the general one-step kernel: per-vertex masses, bitsets, relays, witness relays, ablation flags, diagnostics |
+| `orcut/_witness.py` | the linear-size witness network on its own (one relay per common neighbour; no bitsets, no distances) |
 | `orcut/_layered.py` | W1 on bounded integer metrics by a layered closure; ball and multi-step measures; certificates |
 | `orcut/measures.py` | measure specifications (`"lazy"`, `"nonlazy"`, `"lly"`, idleness p, `Walk`) |
 | `orcut/certify.py` | per-edge certificates (plan and potential) and their exact verification |

@@ -141,7 +141,8 @@ def part_real(a):
                 path = d[:, C.D_PATH]
                 row.update(share_zero=float(np.mean(path == C.PATH_ZERO)),
                            share_fast=float(np.mean((path == C.PATH_FAST) | (path == C.PATH_NOADJ))),
-                           share_cut=float(np.mean(path == C.PATH_CUT)),
+                           share_cut=float(np.mean((path == C.PATH_CUT) | (path == C.PATH_CUTW) | (path == C.PATH_WIT))),
+                           share_witness=float(np.mean((path == C.PATH_CUTW) | (path == C.PATH_WIT))),
                            mean_nodes=float(d[:, C.D_NODES].mean()), mean_arcs=float(d[:, C.D_ARCS].mean()),
                            max_arcs=int(d[:, C.D_ARCS].max()))
                 hub = np.maximum(g.deg[g.edges[:, 0]], g.deg[g.edges[:, 1]]) >= 100

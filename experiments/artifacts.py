@@ -183,9 +183,23 @@ def block_e1(R, O: Out):
 
 # ------------------------------------------------------------------ E2
 
-E2_METHODS = [("ours", "orcut", "-", "o"), ("pot", "POT emd (given $D$)", "--", "s"), ("emd2", "ot.emd2 (given $D$)", ":", "^"),
+E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut without witness relays", (0, (4, 1.5)), "."),
+              ("witness", "witness network alone", (0, (1, 1)), "P"),
+              ("graphflow", "graph min-cost flow (Beckmann)", "-.", "*"),
+              ("pot", "POT emd (given $D$)", "--", "s"), ("emd2", "ot.emd2 (given $D$)", ":", "^"),
               ("ortools", "OR-Tools (given $D$)", "-.", "D"), ("highs", "HiGHS LP (given $D$)", ":", "v"),
               ("oracle", "previous solver", "--", "x")]
+E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
+FIG_W = 5.5  # text width of the paper (inches)
+
+
+def _slope(x, y):
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+    if ok.sum() < 3 or np.ptp(np.log(x[ok])) < 1e-9:
+        return float("nan")
+    return float(np.polyfit(np.log(x[ok]), np.log(y[ok]), 1)[0])
 
 
 def block_e2(R, O: Out, figdir: str):
@@ -217,11 +231,74 @@ def block_e2(R, O: Out, figdir: str):
             O.put("ETwoHubLeafPot", f_x(float((hl["pot_s"] / hl["ours_s"]).iloc[0])), "e2: POT/ours, hub-leaf regime")
     if "ortools_s" in at:
         O.put("ETwoSymOrtoolsMax", f_x((at["ortools_s"] / at["ours_s"]).max()), "e2: OR-Tools/ours, max")
+    # graph min-cost flow (Beckmann), the solver without witness relays, and the witness network alone, at the
+    # largest symmetric size at which each of them ran
+    for col, key, what in (("graphflow_s", "Graphflow", "graph min-cost flow"),
+                           ("nowitness_s", "NoWitness", "orcut without witness relays"),
+                           ("witness_s", "WitnessAlone", "witness network alone")):
+        if col not in sym:
+            continue
+        ok = sym.dropna(subset=[col, "ours_s"])
+        if not len(ok):
+            continue
+        s_ = int(ok["s"].max())
+        at_ = ok[ok["s"] == s_]
+        r = (at_[col] / at_["ours_s"]).to_numpy()
+        O.put(f"ETwoSym{key}S", f_int(s_), f"e2: largest symmetric size with {what}")
+        O.put(f"ETwoSym{key}Min", f_x(r.min()), f"e2: ({what})/ours at that size, min over regimes")
+        O.put(f"ETwoSym{key}Max", f_x(r.max()), f"e2: ({what})/ours at that size, max over regimes")
+        if key == "NoWitness":
+            O.put("ETwoSymNoWitnessMaxRegime", str(at_["regime"].iloc[int(np.argmax(r))]),
+                  "e2: regime of the largest gain of the witness relays")
+    if "graphflow_s" in g and len(hub):
+        okh = hub.dropna(subset=["graphflow_s", "ours_s"])
+        if len(okh):
+            ah_ = okh[okh["s"] == okh["s"].max()]
+            O.put("ETwoHubGraphflowMax", f_x((ah_["graphflow_s"] / ah_["ours_s"]).max()),
+                  "e2: graph min-cost flow/ours at the largest hub size, max over regimes")
+            O.put("ETwoHubGraphflowMin", f_x((ah_["graphflow_s"] / ah_["ours_s"]).min()),
+                  "e2: graph min-cost flow/ours at the largest hub size, min over regimes")
+    # network sizes against the local input m_ij = sum of the degrees of P and N
+    if "witness_arcs" in d and "local_input" in d:
+        dd = d[d["local_input"] > 0]
+        O.put("ETwoWitnessArcsPerInputMax", f_num((dd["witness_arcs"] / dd["local_input"]).max(), 2),
+              "e2: max over edges of (witness-network arcs)/(local input)")
+        if "nowitness_arcs" in d:
+            O.put("ETwoNoWitnessArcsPerInputMax", f_num((dd["nowitness_arcs"] / dd["local_input"]).max(), 2),
+                  "e2: max over edges of (arcs without witness relays)/(local input)")
+            O.put("ETwoHybridArcsPerInputMax", f_num((dd["arcs"] / dd["local_input"]).max(), 2),
+                  "e2: max over edges of (arcs of the default solver)/(local input)")
+        sl_w, sl_n = [], []
+        lines = []
+        gs = g[g["sweep"] == "sym"]
+        for regime, sub in gs.groupby("regime", sort=False):
+            sub = sub.sort_values("s")
+            sw = _slope(sub["local_input"], sub["witness_arcs"])
+            sn = _slope(sub["local_input"], sub["nowitness_arcs"]) if "nowitness_arcs" in sub else float("nan")
+            sl_w.append(sw)
+            sl_n.append(sn)
+            last = sub.dropna(subset=["ours_s"]).iloc[-1]
+            def rr(col):
+                v = float(last.get(col, float("nan")))
+                return f_num(v / float(last["ours_s"]), 2) if math.isfinite(v) else "--"
+            lines.append(" & ".join([regime, f_int(last["s"]), f_int(last["local_input"]),
+                                     f_int(last["nowitness_arcs"]) if "nowitness_arcs" in last else "--",
+                                     f_int(last["arcs"]), f_int(last["witness_arcs"]),
+                                     f_num(sn, 2) if math.isfinite(sn) else "--", f_num(sw, 2) if math.isfinite(sw) else "--",
+                                     rr("nowitness_s"), rr("witness_s"), rr("graphflow_s")]) + r" \\")
+        O.table("witness", lines)
+        if np.isfinite(sl_w).any():
+            O.put("ETwoWitnessArcSlopeMax", f_num(np.nanmax(sl_w), 2),
+                  "e2/sym: max over regimes of the fitted exponent of witness arcs against the local input")
+        if np.isfinite(sl_n).any():
+            O.put("ETwoNoWitnessArcSlopeMax", f_num(np.nanmax(sl_n), 2),
+                  "e2/sym: max over regimes of the exponent of arcs without witness relays against the local input")
     # memory of the general-purpose input at the largest size
     O.put("ETwoDistBytesMax", f_num(d["pot_input_bytes"].max() / 2**20) + r"\,MB", "e2: POT cost matrix at largest size")
     # figure: two panels per sweep, regime 'mixed' (others in the appendix figure)
-    for name, regimes in (("fig-per-edge.pdf", ["mixed"]), ("fig-per-edge-all.pdf", list(g["regime"].unique()))):
-        fig, axes = plt.subplots(len(regimes), 2, figsize=(6.75, 2.1 if len(regimes) == 1 else 1.55 * len(regimes)),
+    for name, regimes, keys in (("fig-per-edge.pdf", ["mixed"], E2_MAIN),
+                                ("fig-per-edge-all.pdf", list(g["regime"].unique()), [m[0] for m in E2_METHODS])):
+        fig, axes = plt.subplots(len(regimes), 2, figsize=(FIG_W, 2.15 if len(regimes) == 1 else 1.5 * len(regimes)),
                                  squeeze=False)
         for r_i, regime in enumerate(regimes):
             for c_i, sweep in enumerate(["sym", "hub"]):
@@ -229,19 +306,19 @@ def block_e2(R, O: Out, figdir: str):
                 sub = g[(g["sweep"] == sweep) & (g["regime"] == regime)].sort_values("s")
                 for key, lab, ls, mk in E2_METHODS:
                     col = f"{key}_s"
-                    if col in sub and sub[col].notna().any():
-                        ax.loglog(sub["s"], sub[col], ls, marker=mk, ms=3, lw=1.2, label=lab)
+                    if key in keys and col in sub and sub[col].notna().any():
+                        ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, label=lab)
                 if "build_s" in sub:
                     ax.loglog(sub["s"], sub["build_s"], color="0.6", lw=0.8, label="build $D$ only")
                 ax.set_xlabel(r"$|\mathcal{U}_i| = |\mathcal{U}_j|$" if sweep == "sym" else r"$|\mathcal{U}_j|$ ($|\mathcal{U}_i| = 32$)",
-                              fontsize=8)
-                ax.set_ylabel("seconds per edge", fontsize=8)
-                ax.set_title(f"{'symmetric' if sweep == 'sym' else 'hub'} sweep, regime '{regime}'", fontsize=8)
-                ax.tick_params(labelsize=7)
+                              fontsize=7)
+                ax.set_ylabel("seconds per edge", fontsize=7)
+                ax.set_title(f"{'symmetric' if sweep == 'sym' else 'hub'} sweep, regime '{regime}'", fontsize=7)
+                ax.tick_params(labelsize=6)
                 ax.grid(True, which="major", lw=0.3, alpha=0.5)
         h, l = axes[0, 0].get_legend_handles_labels()
-        fig.legend(h, l, loc="lower center", ncol=4, fontsize=6, frameon=False)
-        fig.tight_layout(rect=(0, 0.1 if len(regimes) == 1 else 0.04, 1, 1))
+        fig.legend(h, l, loc="lower center", ncol=4, fontsize=5.5, frameon=False)
+        fig.tight_layout(rect=(0, 0.17 if len(regimes) == 1 else 0.05, 1, 1))
         fig.savefig(os.path.join(figdir, name))
         plt.close(fig)
     # real graphs, per bin
@@ -254,6 +331,14 @@ def block_e2(R, O: Out, figdir: str):
             pot = float(np.sum(sub["share"] * sub["pot_simplex_s"]))
             build = float(np.sum(sub["share"] * sub["build_s"]))
             rows.append((gname, ours, pot, build))
+        gf = []
+        for gname, sub in b.groupby("graph", sort=False):
+            if "graphflow_s" in sub and sub["graphflow_s"].notna().all():
+                gf.append(float(np.sum(sub["share"] * sub["graphflow_s"])) / float(np.sum(sub["share"] * sub["ours_s"])))
+        if gf:
+            O.put("ETwoRealGraphflowMedian", f_x(np.median(gf)), "e2/real_bins: median over graphs of graph min-cost flow/ours")
+            O.put("ETwoRealGraphflowMin", f_x(np.min(gf)), "e2/real_bins: min over graphs of graph min-cost flow/ours")
+            O.put("ETwoRealGraphflowMax", f_x(np.max(gf)), "e2/real_bins: max over graphs of graph min-cost flow/ours")
         rp = np.array([p / o for _, o, p, _ in rows])
         rb = np.array([(p + bb) / o for _, o, p, bb in rows])
         O.put("ETwoRealPotMedian", f_x(np.median(rp)), "e2/real_bins: median over graphs of POT(solve)/ours, per edge")
@@ -303,6 +388,11 @@ def block_e3(R, O: Out, figdir: str):
             O.put("EThreePotSolveSpeedupMax", f_x(np.nanmax(sp2)), "e3/real: max of the same")
     if "twin_ratio_hub_max" in lz:
         O.put("EThreeTwinMax", f_num(np.nanmax(lz["twin_ratio_hub_max"].astype(float))), "e3/real: max rows/groups on hub edges")
+    if "share_witness" in lz:
+        O.put("EThreeShareWitnessMedian", f_pct(np.nanmedian(lz["share_witness"].astype(float))),
+              "e3/real: median share of edges solved with witness relays")
+        O.put("EThreeShareWitnessMax", f_pct(np.nanmax(lz["share_witness"].astype(float))),
+              "e3/real: max share of edges solved with witness relays")
     if "share_fast" in lz:
         O.put("EThreeShareFastMedian", f_pct(np.nanmedian(lz["share_fast"].astype(float))), "e3/real: median share of the fast path")
     other = d[d["measure"] != "lazy"]
@@ -334,7 +424,7 @@ def block_e3(R, O: Out, figdir: str):
 
         s = load(R, "e3/synth.csv")
         lines = []
-        fig, axes = plt.subplots(1, 2, figsize=(6.75, 2.3))
+        fig, axes = plt.subplots(1, 2, figsize=(FIG_W, 2.1))
         for ax, regime in zip(axes, ["fixed16", "grow0.4"]):
             sub = s[s["regime"] == regime]
             for fam, ss in sub.groupby("family"):
@@ -360,10 +450,13 @@ def block_e3(R, O: Out, figdir: str):
 
 # ------------------------------------------------------------------ E4
 
-E4_ORDER = [("cut", "two-layer cut, bitsets"), ("+relays", "+ relays"), ("+twins", "+ twin merging"),
-            ("+fast", "+ fast path"), ("full", "+ warm start (orcut)"), ("-relays", "full $-$ relays"),
-            ("-twins", "full $-$ twins"), ("-fast", "full $-$ fast path"), ("oracle", "previous solver (explicit $D$)"),
+E4_ORDER = [("cut", "two-layer cut, bitsets"), ("+relays", "+ relays $H_1,\\dots,H_4$"), ("+twins", "+ twin merging"),
+            ("+fast", "+ fast path"), ("+warm", "+ warm start"), ("full", "+ witness relays (orcut)"),
+            ("-relays", "full $-$ all relays"), ("-twins", "full $-$ twins"), ("-fast", "full $-$ fast path"),
+            ("-warm", "full $-$ warm start"), ("witness", "witness network alone"),
+            ("graphflow", "graph min-cost flow (Beckmann)"), ("oracle", "previous solver (explicit $D$)"),
             ("pot", "explicit $D$ + POT")]
+E4_RULE_AFTER = ("full", "-warm")
 
 
 def block_e4(R, O: Out):
@@ -381,7 +474,7 @@ def block_e4(R, O: Out):
             else:
                 cells.append("--")
         lines.append(" & ".join(cells) + r" \\")
-        if cfg == "full":
+        if cfg in E4_RULE_AFTER:
             lines.append(r"\midrule")
     O.table("ablation", lines)
     O.table("ablation-head", [" & ".join(["configuration"] + [tex_name(g) for g in graphs]) + r" \\"])
@@ -410,6 +503,19 @@ def block_e4(R, O: Out):
         O.put("EFourPotOverFullMedian", f_x(np.median(pot)), "e4: median (explicit D + POT)/(full), single thread")
         O.put("EFourPotOverFullMin", f_x(np.min(pot)), "e4: min (explicit D + POT)/(full)")
         O.put("EFourPotOverFullMax", f_x(np.max(pot)), "e4: max (explicit D + POT)/(full)")
+    for cfg, key, what in (("graphflow", "Graphflow", "graph min-cost flow (Beckmann)"),
+                           ("witness", "WitnessAlone", "witness network alone"),
+                           ("-witness", "NoWitness", "full without witness relays"),
+                           ("-warm", "NoWarm", "full without warm start")):
+        r = []
+        for gname in graphs:
+            sub = d[d["graph"] == gname].set_index("config")["est_total_s"].astype(float)
+            if cfg in sub and "full" in sub:
+                r.append(sub[cfg] / sub["full"])
+        if r:
+            O.put(f"EFour{key}OverFullMedian", f_x(np.median(r)), f"e4: median ({what})/(full), single thread")
+            O.put(f"EFour{key}OverFullMin", f_x(np.min(r)), f"e4: min ({what})/(full)")
+            O.put(f"EFour{key}OverFullMax", f_x(np.max(r)), f"e4: max ({what})/(full)")
     mism = int(np.nansum(d.get("value_mismatch", np.zeros(1)).astype(float)))
     O.put("EFourMismatches", f_int(mism), "e4: value mismatches between configurations")
 

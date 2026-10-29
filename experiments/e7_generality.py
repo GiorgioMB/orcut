@@ -65,7 +65,8 @@ def part_measures(a):
                 t_lazy = t
             row = dict(graph=name, measure=label, m=g.num_edges, deg_max=meta["deg_max"], threads=a.threads, time_s=t,
                        rel_lazy=t / t_lazy if t_lazy else float("nan"), nan=int(np.isnan(out["curvature"]).sum()),
-                       mean_arcs=float(d[:, C.D_ARCS].mean()), share_cut=float(np.mean(d[:, C.D_PATH] == C.PATH_CUT)))
+                       mean_arcs=float(d[:, C.D_ARCS].mean()),
+                       share_cut=float(np.mean(np.isin(d[:, C.D_PATH], (C.PATH_CUT, C.PATH_CUTW, C.PATH_WIT)))))
             rows.add(row)
             log(f"E7M {name:16s} {label:14s} {t:9.3f}s ({row['rel_lazy']:.2f} x lazy)")
 

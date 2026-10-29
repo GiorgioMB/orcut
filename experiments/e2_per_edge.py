@@ -7,6 +7,10 @@ neighbours, in five regimes of the distance structure of U_0 x U_1 (``datasets.e
 b = s, t = 4). Methods, all single-threaded and timed on the same edge after a warm-up:
 
   ours        orcut.curvature, everything included (neighbourhoods, bitsets, cut);
+  nowitness   the same without witness relays (flag F_WITNESS off);
+  witness     the linear-size witness network alone (orcut._witness), everything included;
+  graphflow   min-cost flow on the local graph (Beckmann's formulation; OR-Tools), everything included
+              (it needs no distance matrix either);
   oracle      orcut._reference: full local distance matrix, three-level closure (the previous solver);
   pot         POT's C++ network simplex on the mass-cancelled problem, given the distance matrix;
   emd2        ot.emd2 (the public API that GraphRicciCurvature calls), given the distance matrix;
@@ -63,18 +67,21 @@ def part_a(a):
 
     rows = Rows(f"{out_dir(a.out, 'e2')}/controlled.csv", ["sweep", "regime", "s", "seed"])
     sweeps = []
-    sym = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096] if not a.quick else [16, 64, 256]
-    hub = [64, 256, 1024, 4096, 16384] if not a.quick else [64, 256]
+    sym = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384] if not a.quick else [16, 64, 256]
+    hub = [64, 256, 1024, 4096, 16384, 65536] if not a.quick else [64, 256]
     for s in sym:
         sweeps.append(("sym", s, s, max(1, s // 8)))
     for s in hub:
         sweeps.append(("hub", 32, s, 4))
     seeds = range(a.seeds)
-    methods = ["ours", "oracle", "pot", "emd2", "ortools", "highs"]
+    methods = ["ours", "nowitness", "witness", "graphflow", "oracle", "pot", "emd2", "ortools", "highs"]
+    from orcut import _witness as WT
     dead = {}  # (sweep, regime, method) -> size at which it exceeded the budget
     for sweep, ua, ub, t in sweeps:
         s = ub if sweep == "hub" else ua
         for regime in D.REGIMES:
+            if regime == "dense" and s > 4096:  # 20% of |U_i| x |U_j| as cross edges: too many to generate
+                continue
             for seed in seeds:
                 if rows.done(sweep=sweep, regime=regime, s=s, seed=seed):
                     continue
@@ -87,11 +94,20 @@ def part_a(a):
                 ref_val = float(out["curvature"][0])
                 row.update(P=int(d[C.D_ROWS]), N=int(d[C.D_COLS]), groups=int(d[C.D_GROUPS]),
                            nodes=int(d[C.D_NODES]), arcs=int(d[C.D_ARCS]), path=int(d[C.D_PATH]))
-                lp = B.LocalProblems(g, "lazy")
-                tb, prob = _time_repeated(lambda: lp.build(int(eid[0]), True), min_total=0.1, max_reps=200)
-                pa, pb, M, L, aint, bint = prob
-                row["build_s"] = tb
-                row["pot_input_bytes"] = int(M.size * 8)
+                wd = WT.witness_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[2][0]
+                nd = C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, flags=C.F_ALL & ~C.F_WITNESS, nchunks=1)[2][0]
+                row.update(nowitness_nodes=int(nd[C.D_NODES]), nowitness_arcs=int(nd[C.D_ARCS]),
+                           witness_nodes=int(wd[WT.WD_NODES]), witness_arcs=int(wd[WT.WD_ARCS]),
+                           local_input=int(sum(int(g.deg[x]) for x in set(map(int, g.neighbors(0))) |
+                                               set(map(int, g.neighbors(1))))))
+                gp = B.GraphFlowProblems(g, "lazy")
+                big = ua + ub + t + 2 > 20000  # the explicit distance matrix would need > 400 MB
+                if not big:
+                    lp = B.LocalProblems(g, "lazy")
+                    tb, prob = _time_repeated(lambda: lp.build(int(eid[0]), True), min_total=0.1, max_reps=200)
+                    pa, pb, M, L, aint, bint = prob
+                    row["build_s"] = tb
+                    row["pot_input_bytes"] = int(M.size * 8)
                 row["dist_matrix_bytes"] = int((ua + ub + t + 2) ** 2)
                 for meth in methods:
                     key = (sweep, regime, meth)
@@ -101,8 +117,18 @@ def part_a(a):
                     if meth == "highs" and s > 256:
                         row[f"{meth}_s"] = float("nan")
                         continue
+                    if big and meth not in ("ours", "nowitness", "witness", "graphflow"):
+                        row[f"{meth}_s"] = float("nan")
+                        continue
                     if meth == "ours":  # the kernel driver directly (no Python wrapper), like the C++ calls below
                         f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
+                    elif meth == "nowitness":  # the default solver without witness relays (orcut <= 1.1 behaviour)
+                        f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, flags=C.F_ALL & ~C.F_WITNESS,
+                                               nchunks=1)[0][0]
+                    elif meth == "witness":
+                        f = lambda: WT.witness_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
+                    elif meth == "graphflow":
+                        f = lambda: gp.curvature(int(eid[0]))[0]
                     elif meth == "oracle":
                         f = lambda: RF.exact_ids_reference(g.indptr, g.indices, g.edges, eid, True, False, False, 1)[0, 0]
                     elif meth == "pot":
@@ -150,6 +176,10 @@ def part_b(a):
             t_ours, v = common.best_of(lambda: orcut.curvature(g, "lazy", edges=ids, n_jobs=1), reps=3)
             row["ours_s"] = t_ours / len(ids)
             budget = a.budget * 4
+            gv, gt, gdone = B.run_graph_flow(g, ids, "lazy", budget_s=budget)
+            row["graphflow_s"] = gt
+            row["graphflow_timed"] = gdone
+            row["graphflow_maxdiff"] = float(np.nanmax(np.abs(gv - v))) if gdone else float("nan")
             for meth in ("pot_simplex", "pot_emd2", "ortools"):
                 if meth == "ortools" and 2 ** int(bn) > a.ortools_max:
                     continue

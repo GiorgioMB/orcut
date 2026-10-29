@@ -32,7 +32,7 @@ def test_core_matches_frozen_kernel_under_every_flag(G):
     ids = np.arange(g.num_edges, dtype=np.int64)
     ref = K.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 3)
     for mode, col in ((C.M_LAZY, 0), (C.M_NONLAZY, 1), (C.M_LLY, 2)):
-        for flags in range(16):
+        for flags in range(32):
             v, num, diag = C.core_ids(g.indptr, g.indices, g.edges, ids, mode, flags=flags, nchunks=3)
             assert np.array_equal(v, ref[:, col]), (mode, flags)
             # exact fraction: curvature = 1 - num/den (LLY rescaled)
@@ -90,7 +90,7 @@ def test_weighted_walk_matches_lp(seed):
 
     for e, (i, j) in enumerate(g.edges):
         assert v[e] == pytest.approx(1 - _w1(G, meas(int(i)), meas(int(j))), abs=1e-9)
-    for flags in (0, 5, 10, 15):
+    for flags in (0, 5, 10, 15, 16, 31):
         assert np.array_equal(orcut.curvature(g, walk, flags=flags), v)
 
 
@@ -105,7 +105,7 @@ def test_diagnostics_are_consistent():
     d = out["diagnostics"]
     assert np.all(d[:, C.D_STATUS] == 0)
     assert np.all(d[:, C.D_GROUPS] <= d[:, C.D_ROWS])
-    assert set(np.unique(d[:, C.D_PATH])) <= {C.PATH_ZERO, C.PATH_NOADJ, C.PATH_FAST, C.PATH_CUT}
+    assert set(np.unique(d[:, C.D_PATH])) <= {C.PATH_ZERO, C.PATH_NOADJ, C.PATH_FAST, C.PATH_CUT, C.PATH_CUTW, C.PATH_WIT}
     # twin merging only merges: without it there are at least as many row nodes
     d0 = orcut.curvature(g, diagnostics=True, flags=C.F_ALL & ~C.F_TWINS)["diagnostics"]
     assert np.all(d0[:, C.D_GROUPS] >= d[:, C.D_GROUPS])

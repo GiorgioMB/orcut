@@ -77,6 +77,14 @@ The same guard protects the per-edge baselines of E1, E2, E4 and E5, and E7 skip
 balls give more than 5 x 10^6 pairs (`--max-pairs`), which the reference implementation of the
 layered closure would list explicitly.
 
+**Graph min-cost flow (Beckmann).** W1 on the hop metric is also the minimum cost of a flow on the
+graph itself, with unit cost per edge, supply m_i - m_j, and no distance matrix (Beckmann's
+formulation). For one-step measures an optimal flow uses only edges incident to N[i] u N[j] (every
+pair is joined by a shortest path of length at most 3 of this kind), so `baselines.GraphFlowProblems`
+solves the min-cost flow on these edges, in both directions, with OR-Tools' `SimpleMinCostFlow`
+(integer masses, exact). It is the strongest distance-free baseline we know; its time includes
+building the arcs (numba) and is otherwise measured like the other baselines (E2, E4).
+
 **Exactness.** orcut returns W1 as an exact fraction; E1 compares it with OR-Tools' integer
 min-cost flow on the explicit distance matrix (exact fractions), with the independent oracle of
 `orcut._reference`, with the frozen kernel of orcut 1.0.0 (the solver of the companion paper), and
@@ -114,6 +122,6 @@ results/
 
 ## Expected cost (32 cores, 64 GB)
 
-Roughly: E1 2 h, E2 4 h, E3 12--24 h (the POT estimates and Orkut dominate), E4 up to 25 h (900 s
-per configuration and graph), E5 up to 1--2 days (GRC time limits), E6 6 h, E7 6 h. With the job
+Roughly: E1 2 h, E2 4 h, E3 12--24 h (the POT estimates and Orkut dominate), E4 up to 40 h (900 s
+per configuration and graph, 15 configurations), E5 up to 1--2 days (GRC time limits), E6 6 h, E7 6 h. With the job
 array the steps run in parallel and the wall time is that of the longest step.

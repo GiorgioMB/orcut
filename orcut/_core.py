@@ -17,9 +17,18 @@ at distance at most 2 except pairs of U_i x U_j, which are at distance 1, 2, or
 
 Differences from the 1.0.0 kernel: masses are per vertex (arrays), the TLW
 certificate is not computed, every engineering step can be switched off
-(``F_TWINS``, ``F_RELAYS``, ``F_FAST``, ``F_WARM``, for ablations; values do not
-depend on the flags), and every edge reports diagnostics (``N_DIAG`` columns)
-and its exact value as an integer fraction W1 = num / den.
+(``F_TWINS``, ``F_RELAYS``, ``F_FAST``, ``F_WARM``, ``F_WITNESS``, for ablations;
+values do not depend on the flags), and every edge reports diagnostics
+(``N_DIAG`` columns) and its exact value as an integer fraction W1 = num / den.
+
+Witness relays (1.2, ``F_WITNESS``): a pair of P x N at distance 2 has a common
+neighbour w, and every pair of (N(w) & P) x (N(w) & N) is within distance 2, so
+one zero-weight relay per such w can carry the implications of all of them. The
+kernel uses them in two ways: for the pairs left at distance 2 after the relays
+H1--H4, when that gives a network at least four times smaller (``PATH_CUTW``);
+and for the whole edge (:mod:`orcut._witness`, ``PATH_WIT``) when the bitsets
+would cost more than ``dispatch`` times the local input, the sum of the degrees
+of the rows and columns, which bounds the size of the witness network.
 """
 from __future__ import annotations
 
@@ -29,17 +38,17 @@ from numba import njit, prange
 from ._kernels import (INF, U0, U1, _BLOCK_BUDGET, _WARM_MIN_ARCS, _csr, _ctz, _dedupe, _dinic, _maxflow,
                        _popcount, _setbit, _take_i, _take_u)
 
-M_LAZY = 0
-M_NONLAZY = 1
-M_IDLE = 2
-M_LLY = 3
-M_WALK = 4
+from ._base import M_IDLE, M_LAZY, M_LLY, M_NONLAZY, M_WALK, _LMAX, _gcd  # noqa: F401 (re-exported)
+from ._witness import (N_WDIAG, W_DIRECT, W_TWINS, W_WARM, WD_ARCS, WD_COLS, WD_GROUPS, WD_NODES, WD_ROWS,
+                       WD_STATUS, _edge_witness)
 
 F_TWINS = 1    # merge rows with identical adjacency and coverage patterns
 F_RELAYS = 2   # route implications of whole blocks of pairs within distance 2 through hub nodes
 F_FAST = 4     # W1 = 2A - maxflow(G1) when no pair is at distance 3
 F_WARM = 8     # warm-start the two-layer network with a maximum flow of G1
-F_ALL = 15
+F_WITNESS = 16  # relays per common neighbour: for the remaining pairs at distance 2 when that is smaller, and the
+                # whole witness network when the bitsets would cost more than _DISPATCH_K times the local input
+F_ALL = 31
 
 N_DIAG = 8
 D_PATH = 0      # PATH_* below
@@ -55,24 +64,20 @@ PATH_ZERO = 0   # m_i = m_j
 PATH_NOADJ = 1  # no pair of P x N is adjacent and none is at distance 3: W1 = 2A
 PATH_FAST = 2   # one bipartite max flow (no pair at distance 3)
 PATH_CUT = 3    # two-layer closure network
+PATH_CUTW = 4   # two-layer closure network with witness relays
+PATH_WIT = 5    # witness network (orcut._witness), chosen because the bitsets would cost more
+_PATH_DISPATCH = -1  # internal: _edge_core hands the edge over to the witness network
 
-_LMAX = np.int64(1) << np.int64(50)   # common denominators up to 2^50 keep W1 / den exact in float64
-
-
-@njit(cache=True, inline="always")
-def _gcd(a, b):
-    a = abs(a)
-    b = abs(b)
-    while b != 0:
-        a, b = b, a % b
-    return a
+_WIT_MIN = 256  # witness relays are considered only above this many residual pairs at distance 2
+_DISPATCH_K = 4  # build the witness network instead when the bitsets would cost more than this times the local input
 
 
 # ------------------------------------------------- one measure on one edge
 
 
 @njit(cache=True)
-def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, oi, bu, ou, diag):
+def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, oi, bu, ou, diag,
+                 R, ns, use_wit, indptr, indices, rowv, slot, sstamp, scnt, epoch, wc):
     """W1 (scaled by the common denominator of the masses) for net masses rm on the
     rows (U_i, then i, j, triangle vertices) and demands cm = -(net mass) on the
     columns (U_j, then i, j, triangle vertices); a vertex is in P where its row
@@ -266,13 +271,112 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
     for x in range(W):
         n_colfull += _popcount(colfull[x])
     use_h4 = n_colfull > 0 and n_rowpart > 0
-    # nodes: s=0, t=1, hubs 2..5, rows (p, q), columns (r, t)
+    # witness relays: the remaining pairs at distance 2 (a partial row and a partial column of U_j)
+    # can be routed through one zero-weight node per common neighbour w of the pair (bitset R(w)
+    # restricted to the partial columns) instead of one arc per pair; used when it needs fewer arcs.
+    e2r = 0
+    if relays and use_wit and n_rowpart > 0:
+        for g in range(ng):
+            if gkind[g] == 0:
+                lb = leader[g] * KW
+                for x in range(W):
+                    e2r += _popcount(keys[lb + W + x] & ~keys[lb + x] & ~colfull[x])
+    tryw = relays and use_wit and e2r >= _WIT_MIN
+    if tryw:  # the relays need at least one arc per (row class, witness): give up early if that is too many
+        inc = 0
+        for g in range(ng):
+            if gkind[g] == 0:
+                inc += wc[rid[leader[g]]]
+        tryw = 4 * inc < e2r
+    bi, oi, srow = _take_i(bi, oi, ns if tryw else 0)
+    bi, oi, scol = _take_i(bi, oi, ns if tryw else 0)
+    bi, oi, snode = _take_i(bi, oi, ns if tryw else 0)
+    bu, ou, pcm = _take_u(bu, ou, W if tryw else 0)
+    # witness (common-neighbour) lists of the leaders of the partial row classes, by row index
+    bi, oi, wst = _take_i(bi, oi, nUi + 1)
+    nwl = 0
+    if tryw:
+        for g in range(ng):
+            if gkind[g] == 0:
+                xv = rowv[rid[leader[g]]]
+                for e in range(indptr[xv], indptr[xv + 1]):
+                    if sstamp[indices[e]] == epoch:
+                        nwl += 1
+    bi, oi, wl = _take_i(bi, oi, nwl)
+    witness = False
+    nH = 0
+    if tryw:
+        for r in range(nUi + 1):
+            wst[r] = 0
+        for g in range(ng):
+            if gkind[g] == 0:
+                r = rid[leader[g]]
+                xv = rowv[r]
+                cnt = 0
+                for e in range(indptr[xv], indptr[xv + 1]):
+                    if sstamp[indices[e]] == epoch:
+                        cnt += 1
+                wst[r + 1] = cnt
+        for r in range(nUi):
+            wst[r + 1] += wst[r]
+        for sl in range(ns):
+            srow[sl] = 0
+            scol[sl] = -1
+        for g in range(ng):
+            if gkind[g] == 0:
+                r = rid[leader[g]]
+                xv = rowv[r]
+                z = wst[r]
+                for e in range(indptr[xv], indptr[xv + 1]):
+                    w = indices[e]
+                    if sstamp[w] == epoch:
+                        wl[z] = w
+                        z += 1
+                        srow[slot[w]] += 1
+        # upper bound on the arcs of the relays (scnt[w]: columns adjacent to w)
+        ub = 0
+        for r in range(nUi):
+            for z in range(wst[r], wst[r + 1]):
+                w = wl[z]
+                sl = slot[w]
+                if scol[sl] == -1:  # first visit of this witness
+                    scol[sl] = -2
+                    if srow[sl] == 1 or scnt[w] == 1:
+                        ub += srow[sl] * scnt[w]
+                    else:
+                        ub += srow[sl] + scnt[w] + 1
+        if 4 * ub < e2r:  # clearly smaller: relays make the flow a little harder
+            witness = True
+            for x in range(W):
+                lo = x * 64
+                if lo + 64 <= nUj:
+                    um = ~U0
+                elif lo < nUj:
+                    um = (U1 << np.uint64(nUj - lo)) - U1
+                else:
+                    um = U0
+                pcm[x] = um & Nm[x] & ~colfull[x]
+            for sl in range(ns):
+                if scol[sl] == -2:
+                    cnt = 0
+                    for x in range(W):
+                        cnt += _popcount(R[sl * W + x] & pcm[x])
+                    scol[sl] = cnt
+                else:
+                    scol[sl] = 0
+                if srow[sl] > 1 and scol[sl] > 1:
+                    snode[sl] = nH
+                    nH += 1
+                else:
+                    snode[sl] = -1
+    # nodes: s=0, t=1, hubs 2..5, rows (p, q), columns (r, t), witness relays
     H1 = 2  # every P row -> columns of N in C
     H2 = 3  # rows of P in C -> every column
     H3 = 4  # fully covered U_i rows -> every U_j column
     H4 = 5  # every partial U_i row -> fully covered U_j columns
     cbase = 6 + 2 * ng
-    nV = cbase + 2 * nN
+    hbase = cbase + 2 * nN
+    nV = hbase + nH
     nA = 3 * ng + 2 * nN
     for g in range(ng):
         lb = leader[g] * KW
@@ -280,8 +384,15 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
             nA += 2 * _popcount(keys[lb + x])
         if relays:
             if gkind[g] == 0:
-                for x in range(W):
-                    nA += _popcount(keys[lb + W + x] & ~keys[lb + x] & ~colfull[x])
+                if witness:
+                    r = rid[leader[g]]
+                    for z in range(wst[r], wst[r + 1]):
+                        sl = slot[wl[z]]
+                        if scol[sl] > 0:
+                            nA += 1 if snode[sl] >= 0 else scol[sl]
+                else:
+                    for x in range(W):
+                        nA += _popcount(keys[lb + W + x] & ~keys[lb + x] & ~colfull[x])
         else:
             for k in range(nc):  # one arc q -> r per non-adjacent pair within distance 2
                 if cidx[k] < 0 or ((keys[lb + (k >> 6)] >> np.uint64(k & 63)) & U1) != U0:
@@ -289,6 +400,10 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
                 if (gkind[g] != 0 or k >= nUj
                         or ((keys[lb + W + (k >> 6)] >> np.uint64(k & 63)) & U1) != U0):
                     nA += 1
+    if witness:
+        for sl in range(ns):
+            if snode[sl] >= 0:
+                nA += scol[sl]
     if relays:
         if nNC > 0:
             nA += ng + nNC
@@ -356,12 +471,27 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
                 tl[m] = pn_; hd[m] = cbase + 2 * c; cp[m] = INF; m += 1
                 tl[m] = qn; hd[m] = cbase + 2 * c + 1; cp[m] = INF; m += 1
                 z &= z - U1
-            if relays and gkind[g] == 0:  # covered, non-adjacent, column not fully covered
+            if relays and gkind[g] == 0 and not witness:  # covered, non-adjacent, column not fully covered
                 z = keys[lb + W + x] & ~keys[lb + x] & ~colfull[x]
                 while z != U0:
                     c = cidx[x * 64 + _ctz(z)]
                     tl[m] = qn; hd[m] = cbase + 2 * c; cp[m] = INF; m += 1
                     z &= z - U1
+        if witness and gkind[g] == 0:  # through the common neighbours of the leader row
+            r = rid[leader[g]]
+            for z0 in range(wst[r], wst[r + 1]):
+                sl = slot[wl[z0]]
+                if scol[sl] <= 0:
+                    continue
+                if snode[sl] >= 0:
+                    tl[m] = qn; hd[m] = hbase + snode[sl]; cp[m] = INF; m += 1
+                else:
+                    for x in range(W):
+                        z = R[sl * W + x] & pcm[x]
+                        while z != U0:
+                            c = cidx[x * 64 + _ctz(z)]
+                            tl[m] = qn; hd[m] = cbase + 2 * c; cp[m] = INF; m += 1
+                            z &= z - U1
         if relays:
             if nNC > 0:
                 tl[m] = qn; hd[m] = H1; cp[m] = INF; m += 1
@@ -378,6 +508,15 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
                 if (gkind[g] != 0 or k >= nUj
                         or ((keys[lb + W + (k >> 6)] >> np.uint64(k & 63)) & U1) != U0):
                     tl[m] = qn; hd[m] = cbase + 2 * cidx[k]; cp[m] = INF; m += 1
+    if witness:
+        for sl in range(ns):
+            if snode[sl] >= 0:
+                for x in range(W):
+                    z = R[sl * W + x] & pcm[x]
+                    while z != U0:
+                        c = cidx[x * 64 + _ctz(z)]
+                        tl[m] = hbase + snode[sl]; hd[m] = cbase + 2 * c; cp[m] = INF; m += 1
+                        z &= z - U1
     for k in range(nc):
         c = cidx[k]
         if c < 0:
@@ -423,7 +562,7 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
                 cap[e] -= f
                 cap[rev[e]] += f
     F2, bi, oi = _dinic(nV, start, to, cap, rev, 0, 1, bi, oi)
-    diag[D_PATH] = PATH_CUT
+    diag[D_PATH] = PATH_CUTW if witness else PATH_CUT
     diag[D_GROUPS] = ng
     diag[D_NODES] = nV
     diag[D_ARCS] = nA
@@ -436,13 +575,17 @@ def _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags, bi, o
 
 @njit(cache=True)
 def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd, flags,
-               slot, sstamp, epoch, bi, bu, k, out, num, diag, budget):
+               slot, sstamp, epoch, bi, bu, k, out, num, diag, budget, scnt, dispatch):
     """The curvature of edge (i0, j0) for measure ``mode``, written into out[k]
     (float), num[k] = (W1 numerator, denominator) and diag[k]. ``wts`` are the
     integer weights of the directed CSR entries (``M_WALK`` only); ``Dp``,
     ``nself``, ``coef``, ``gdv`` the per-vertex reduced denominators, self
     numerators, idleness complements, and divisors of the walk (see
-    :func:`orcut.measures.walk_tables`). Returns the (possibly grown) arenas."""
+    :func:`orcut.measures.walk_tables`). Returns the (possibly grown) arenas.
+
+    If ``dispatch`` > 0 and witness relays are on, the bitset work is bounded by ``dispatch`` times
+    the local input (the sum of the degrees of the rows and columns): when it would exceed it, the
+    edge is left to the witness network (diag[k, D_PATH] = _PATH_DISPATCH, nothing else written)."""
     # orient so that the larger neighbourhood is on the row side
     if indptr[i0 + 1] - indptr[i0] >= indptr[j0 + 1] - indptr[j0]:
         i = i0
@@ -598,17 +741,36 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
 
     # ---- distance-free local structure (as in orcut 1.0.0)
     ns = 0
+    msum = np.int64(0)
     for kk in range(nc):
         bb = colv[kk]
+        msum += indptr[bb + 1] - indptr[bb]
         for e in range(indptr[bb], indptr[bb + 1]):
             w = indices[e]
             if sstamp[w] != epoch:
                 sstamp[w] = epoch
                 slot[w] = ns
+                scnt[w] = 0
                 ns += 1
+            scnt[w] += 1
     WB = W
     if ns * W > budget:
         WB = max(1, budget // max(ns, 1))
+    # ---- bounded bitset work: hand the edge to the witness network when the bitsets cost too much
+    use_disp = dispatch > 0 and (flags & F_WITNESS) != 0 and (flags & F_RELAYS) != 0
+    lim = np.int64(0)
+    if use_disp:
+        for r in range(nr):
+            av = rowv[r]
+            msum += indptr[av + 1] - indptr[av]
+        lim = dispatch * msum
+        if (ns + nr) * W > lim:
+            diag[k, D_PATH] = _PATH_DISPATCH
+            return bi, bu
+    ops = np.int64(0)
+    nfull = 0       # rows found within distance 2 of all of U_j so far (first block of columns)
+    nseen = 0
+    aborted = False
 
     bu, ou, UjMask = _take_u(bu, ou, W)
     for x in range(W):
@@ -619,6 +781,9 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
             UjMask[x] = (U1 << np.uint64(nUj - lo)) - U1
         else:
             UjMask[x] = U0
+    bi, oi, wc = _take_i(bi, oi, nUi)  # neighbours of each row with a bitset (its witnesses)
+    for r in range(nUi):
+        wc[r] = 0
     bu, ou, Adj = _take_u(bu, ou, nr * W)  # columns adjacent to each row
     bu, ou, Cov = _take_u(bu, ou, nUi * W)  # U_j columns within distance 2
     bu, ou, R = _take_u(bu, ou, ns * WB)  # columns adjacent to each middle vertex
@@ -652,18 +817,24 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
             continue
         for r in range(nUi):
             cb = r * W + b0
+            if b0 == 0:
+                nseen += 1
             done = True
             for x in range(wb):
                 Cov[cb + x] = Adj[cb + x]
                 if (Cov[cb + x] & UjMask[b0 + x]) != UjMask[b0 + x]:
                     done = False
             if done:
+                if b0 == 0:
+                    nfull += 1
                 continue
             xv = rowv[r]
             for e in range(indptr[xv], indptr[xv + 1]):
                 w = indices[e]
                 if sstamp[w] != epoch:
                     continue
+                if b0 == 0:
+                    wc[r] += 1
                 sb = slot[w] * WB
                 done = True
                 for x in range(wb):
@@ -672,7 +843,23 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
                     if (c & UjMask[b0 + x]) != UjMask[b0 + x]:
                         done = False
                 if done:
+                    if b0 == 0:
+                        nfull += 1
                     break
+                if use_disp:
+                    ops += wb
+                    # over budget and most rows so far are not full (rows that fill up collapse into one
+                    # relay arc each, and often into the one-layer fast path: keep the bitsets then)
+                    if ops > lim and 2 * nfull < nseen:
+                        aborted = True
+                        break
+            if aborted:
+                break
+        if aborted:
+            break
+    if aborted:
+        diag[k, D_PATH] = _PATH_DISPATCH
+        return bi, bu
     bi, oi, fullr = _take_i(bi, oi, nUi)
     bu, ou, colfull = _take_u(bu, ou, W)
     for x in range(W):
@@ -687,8 +874,11 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
                 f = 0
         fullr[r] = f
 
+    # witness relays need every bitset R(w) in memory (no column blocks)
+    use_wit = (flags & F_WITNESS) != 0 and (flags & F_RELAYS) != 0 and WB == W
     Wd, bi, bu = _measure_arr(Adj, Cov, fullr, colfull, nUi, nUj, nT, W, rm, cm, flags,
-                              bi, oi, bu, ou, diag[k])
+                              bi, oi, bu, ou, diag[k], R, ns, use_wit, indptr, indices, rowv, slot, sstamp,
+                              scnt, epoch, wc)
     num[k, 0] = Wd
     num[k, 1] = L
     if mode == M_LLY:
@@ -706,12 +896,32 @@ _RUN_BLOCK = 16
 
 @njit(cache=True)
 def _core_chunk(indptr, indices, wts, Dp, nself, coef, gdv, edges, ids, c, nch, mode, pn, pd, flags,
-                out, num, diag, budget):
+                out, num, diag, budget, dispatch):
     n = indptr.shape[0] - 1
     slot = np.empty(n, np.int64)
     sstamp = np.full(n, -1, np.int64)
+    scnt = np.empty(n, np.int64)
     bi = np.empty(1 << 12, np.int64)
     bu = np.empty(1 << 10, np.uint64)
+    # workspace of the witness network, allocated at the first edge handed over to it
+    have_w = False
+    stP = np.full(1, -1, np.int64)
+    idP = np.empty(1, np.int64)
+    stN = np.full(1, -1, np.int64)
+    idN = np.empty(1, np.int64)
+    stR = np.full(1, -1, np.int64)
+    stW = np.full(1, -1, np.int64)
+    idW = np.empty(1, np.int64)
+    cntR = np.empty(1, np.int64)
+    cntC = np.empty(1, np.int64)
+    out1 = np.empty(1)
+    num1 = np.zeros((1, 2), np.int64)
+    diag1 = np.zeros((1, N_WDIAG), np.int64)
+    wflags = W_DIRECT
+    if (flags & F_TWINS) != 0:
+        wflags |= W_TWINS
+    if (flags & F_WARM) != 0:
+        wflags |= W_WARM
     K = ids.shape[0]
     nb = (K + _RUN_BLOCK - 1) // _RUN_BLOCK
     for bk in range(c, nb, nch):
@@ -720,12 +930,39 @@ def _core_chunk(indptr, indices, wts, Dp, nself, coef, gdv, edges, ids, c, nch, 
         for k in range(lo, hi):
             e = ids[k]
             bi, bu = _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, edges[e, 0], edges[e, 1], mode,
-                                pn, pd, flags, slot, sstamp, k, bi, bu, k, out, num, diag, budget)
+                                pn, pd, flags, slot, sstamp, k, bi, bu, k, out, num, diag, budget, scnt, dispatch)
+            if diag[k, D_PATH] == _PATH_DISPATCH:
+                if not have_w:
+                    stP = np.full(n, -1, np.int64)
+                    idP = np.empty(n, np.int64)
+                    stN = np.full(n, -1, np.int64)
+                    idN = np.empty(n, np.int64)
+                    stR = np.full(n, -1, np.int64)
+                    stW = np.full(n, -1, np.int64)
+                    idW = np.empty(n, np.int64)
+                    cntR = np.empty(n, np.int64)
+                    cntC = np.empty(n, np.int64)
+                    have_w = True
+                for z in range(N_WDIAG):
+                    diag1[0, z] = 0
+                bi = _edge_witness(indptr, indices, wts, Dp, nself, coef, gdv, edges[e, 0], edges[e, 1], mode, pn, pd,
+                                   wflags, stP, idP, stN, idN, stR, stW, idW, cntR, cntC, k, bi, 0, out1, num1, diag1)
+                out[k] = out1[0]
+                num[k, 0] = num1[0, 0]
+                num[k, 1] = num1[0, 1]
+                diag[k, D_PATH] = PATH_ZERO if num1[0, 0] == 0 else PATH_WIT
+                diag[k, D_ROWS] = diag1[0, WD_ROWS]
+                diag[k, D_GROUPS] = diag1[0, WD_GROUPS]
+                diag[k, D_COLS] = diag1[0, WD_COLS]
+                diag[k, D_NODES] = diag1[0, WD_NODES]
+                diag[k, D_ARCS] = diag1[0, WD_ARCS]
+                diag[k, D_WARM] = 0
+                diag[k, D_STATUS] = diag1[0, WD_STATUS]
 
 
 @njit(cache=True, parallel=True)
 def _core_run(indptr, indices, wts, Dp, nself, coef, gdv, edges, ids, mode, pn, pd, flags, nchunks,
-              budget=_BLOCK_BUDGET):
+              budget=_BLOCK_BUDGET, dispatch=_DISPATCH_K):
     K = ids.shape[0]
     out = np.full(K, np.nan)
     num = np.zeros((K, 2), np.int64)
@@ -736,7 +973,7 @@ def _core_run(indptr, indices, wts, Dp, nself, coef, gdv, edges, ids, mode, pn, 
     nchunks = max(1, min(nchunks, nb))
     for c in prange(nchunks):
         _core_chunk(indptr, indices, wts, Dp, nself, coef, gdv, edges, ids, c, nchunks, mode, pn, pd, flags,
-                    out, num, diag, budget)
+                    out, num, diag, budget, dispatch)
     return out, num, diag
 
 
@@ -744,10 +981,12 @@ _DUMMY_I = np.zeros(1, np.int64)
 
 
 def core_ids(indptr, indices, edges, ids, mode, pn=0, pd=1, flags=F_ALL, nchunks=None, walk=None,
-             budget=_BLOCK_BUDGET):
+             budget=_BLOCK_BUDGET, dispatch=_DISPATCH_K):
     """Curvatures of edges[ids] for measure ``mode`` (``M_*``): returns
     (values (K,), exact W1 as (numerator, denominator) (K, 2), diagnostics (K, N_DIAG)).
-    ``walk`` = (wts, Dp, nself, coef, gdv) for ``M_WALK`` (see :func:`orcut.measures.walk_tables`)."""
+    ``walk`` = (wts, Dp, nself, coef, gdv) for ``M_WALK`` (see :func:`orcut.measures.walk_tables`).
+    ``dispatch``: bound on the bitset work, in multiples of the local input, beyond which an edge is
+    solved on the witness network (0: never; needs ``F_WITNESS``)."""
     from ._kernels import _ids, _nchunks
     if mode == M_WALK:
         if walk is None:
@@ -756,4 +995,4 @@ def core_ids(indptr, indices, edges, ids, mode, pn=0, pd=1, flags=F_ALL, nchunks
     else:
         wts = Dp = nself = coef = gdv = _DUMMY_I
     return _core_run(indptr, indices, wts, Dp, nself, coef, gdv, edges, _ids(ids), int(mode), int(pn), int(pd),
-                     int(flags), _nchunks(nchunks), budget)
+                     int(flags), _nchunks(nchunks), budget, int(dispatch))

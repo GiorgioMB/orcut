@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0
+
+- Witness relays (`F_WITNESS`, on by default: `F_ALL = 31`). A pair of P x N at distance 2 has a
+  common neighbour w, and every pair in (N(w) & P) x (N(w) & N) is within distance 2, so the
+  implications of these pairs can go through one zero-weight relay per common neighbour. When the
+  pairs left at distance 2 after the relays H1--H4 would need many explicit arcs, the kernel routes
+  them through per-witness relays instead, if this is at least four times smaller (an upper bound
+  is checked first, so the test costs little when it fails). Values are unchanged (tested bit for
+  bit against the previous kernels); diagnostics report the new path `PATH_CUTW = 4`.
+- Bounded bitset work (part of `F_WITNESS`; `core_ids(..., dispatch=4)`): when the bitsets of an
+  edge would cost more than four times its local input (the sum of the degrees of the rows and
+  columns), before they are built or during the coverage while most rows are not yet within
+  distance 2 of all of U_j, the edge is solved on the witness network instead (`PATH_WIT = 5`).
+  On large sparse neighbourhoods this is 2--13x faster; on the real graphs we tried it never
+  triggers and costs under 3%.
+- `orcut._witness.witness_ids`: the linear-size witness network on its own (one relay per vertex
+  adjacent to both P and N; twin merging; direct arcs for witnesses that reach one row class or one
+  column; warm start). It has at most 3 m_ij + 2 nodes and 5 m_ij arcs, m_ij the sum of the degrees
+  of P and N, and is built in O(m_ij) from the adjacency lists, with no bitsets and no distances.
+  Exact fractions identical to `orcut.curvature` (tested for six measures and every flag).
+- Experiments: the graph min-cost-flow formulation of W1 (Beckmann's problem on the edges incident to
+  N[i] u N[j], OR-Tools) as a baseline in E2 and E4; the solver without witness relays and the
+  witness network alone in E2 and E4; network sizes against the local input in E2.
+
 ## 1.1.0
 
 - `orcut.curvature(graph, measure)`: the general one-step kernel (`orcut/_core.py`) for lazy,
