@@ -145,7 +145,7 @@ def part_sinkhorn(a):
                         errs.append(np.full(len(s), np.nan))
                         continue
                     v, _, _, done = B.run_local(g, s, "pot_simplex" if meth == "pot" else "sinkhorn", kind="idle:1/2",
-                                                reps=1, reg=reg or None, budget_s=left, times=t)
+                                                reps=1, reg=reg or None, budget_s=left, times=t, max_pairs=5e7)
                     errs.append(np.abs(v - ex))
                 times.append(t)
             ok_bins = np.array([np.isfinite(e).any() for e in errs])

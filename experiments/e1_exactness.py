@@ -120,13 +120,12 @@ def run_graph(spec, rows, a):
         row["ortools_mismatch"] = bad
         # POT (floating point), on the same sample
         if measure != "walk":
-            vp, _, _, done = B.run_local(g, sub[: a.pot_cap], "pot_simplex", kind=_lp_kind(measure), reps=1)
+            psub = sub[: a.pot_cap]
+            vp, _, _, done = B.run_local(g, psub, "pot_simplex", kind=_lp_kind(measure), reps=1, max_pairs=5e7)
             if measure == "lly":
-                dmax = np.maximum(g.deg[g.edges[sub[:done], 0]], g.deg[g.edges[sub[:done], 1]]).astype(float)
-                vp = vp[:done] * (dmax + 1) / dmax
-            else:
-                vp = vp[:done]
-            potd = float(np.max(np.abs(vp - val[sub[:done]]))) if done else 0.0
+                dmax = np.maximum(g.deg[g.edges[psub, 0]], g.deg[g.edges[psub, 1]]).astype(float)
+                vp = vp * (dmax + 1) / dmax
+            potd = float(np.nanmax(np.abs(vp - val[psub]))) if done else 0.0
             row["pot_checked"] = int(done)
             row["pot_maxdiff"] = potd
         # certificates

@@ -87,7 +87,7 @@ def main():
                     if left <= 0:
                         times.append(np.full(len(s), np.nan))
                         continue
-                    B.run_local(g, s, "pot_simplex", reps=1, budget_s=left, times=ts, btimes=tb)
+                    B.run_local(g, s, "pot_simplex", reps=1, budget_s=left, times=ts, btimes=tb, max_pairs=5e7)
                     times.append(ts + tb)
             timed = sum(int(np.isfinite(t).sum()) for t in times)
             row.update(timed=timed, est_total_s=estimate_total(strata, times),

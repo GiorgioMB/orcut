@@ -147,24 +147,54 @@ class RadiusProblems:
         return a, b, M
 
 
+def support_pairs(g, ids, r):
+    """|B_r(i)| * |B_r(j)| for the edges ids (an upper bound on |P| |N| of balls and r-step walks)."""
+    from orcut import _layered as LY
+
+    n = g.num_nodes
+    stamp = np.full(n, -1, np.int64)
+    dist = np.zeros(n, np.int64)
+    order = np.empty(n, np.int64)
+    out = np.empty(len(ids), np.int64)
+    ep = 0
+    for k, e in enumerate(ids):
+        i, j = int(g.edges[e, 0]), int(g.edges[e, 1])
+        ep += 1
+        bi = LY._bfs(g.indptr, g.indices, i, r, stamp, ep, dist, order)
+        ep += 1
+        bj = LY._bfs(g.indptr, g.indices, j, r, stamp, ep, dist, order)
+        out[k] = bi * bj
+    return out
+
+
 def part_radius(a):
     import numba
     import orcut
 
     rows = Rows(f"{out_dir(a.out, 'e7')}/radius.csv", ["graph", "config"])
-    graphs = a.graphs or ["bundled:power_grid", "bundled:yeast", "bundled:jazz", "bundled:arxiv", "synth:ER:5000:8:0",
-                          "synth:RGG:5000:10:0", "synth:BA:5000:6:0", "synth:CL2.5:5000:6:0", "real:Deezer"]
+    graphs = a.graphs or ["bundled:power_grid", "bundled:yeast", "bundled:jazz", "synth:ER:5000:8:0",
+                          "synth:RGG:5000:10:0", "synth:WS:5000:8:0", "synth:BA:5000:6:0", "synth:CL2.5:5000:6:0"]
     if a.quick:
         graphs = ["bundled:yeast", "bundled:jazz"]
     configs = [("ball", 2), ("ball", 3), ("walk", 2), ("walk", 3)]
     for spec in graphs:
         name, g, meta = R.load(spec, a.data_dir)
         strata = common.stratified_bins(g, a.per_bin, seed=2)
+        ids_sample = np.concatenate([s_ for _, s_, _ in strata])
         for kind, r in configs:
             cfg = f"{kind} r={r}"
             if rows.done(graph=name, config=cfg):
                 continue
             row = dict(graph=name, config=cfg, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"], threads=a.threads)
+            # the reference implementation lists every pair of P x N: skip supports that are too large
+            # (the sample contains the edges of largest d_i + d_j)
+            pairs = support_pairs(g, ids_sample, r)
+            row["max_support_pairs"] = int(pairs.max()) if len(pairs) else 0
+            if row["max_support_pairs"] > a.max_pairs:
+                row["status"] = f"skipped: supports up to {row['max_support_pairs']} pairs (> --max-pairs)"
+                rows.add(row)
+                log(f"E7R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs)")
+                continue
             f_all = (lambda ids=None: orcut.ball_curvature(g, r, edges=ids, n_jobs=a.threads)) if kind == "ball" else \
                 (lambda ids=None: orcut.walk_curvature(g, r, edges=ids, n_jobs=a.threads))
             ids_all = np.concatenate([s for _, s, _ in strata])
@@ -223,6 +253,8 @@ def main():
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--per-bin", type=int, default=30)
     ap.add_argument("--whole-max-edges", type=int, default=2 * 10**5)
+    ap.add_argument("--max-pairs", type=float, default=5e6,
+                    help="skip a graph and support radius whose largest |B_r(i)| |B_r(j)| exceeds this (memory)")
     ap.add_argument("--budget", type=float, default=600.0, help="seconds of POT per graph and configuration")
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)

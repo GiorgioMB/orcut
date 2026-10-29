@@ -554,20 +554,20 @@ def block_e6(R, O: Out, figdir: str):
                 O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
             import matplotlib.pyplot as plt
 
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(6.75 if lfr["n_"].nunique() > 1 else 3.25, 2.2),
-                                     squeeze=False)
+            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(3.3, 2.0), squeeze=False, sharey=True)
             for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
                 for meth, lab in methods:
                     ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()
                     ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=3, lw=1, capsize=2,
                                 label=lab.replace("$", ""), ls="--" if meth == "louvain" else "-")
-                ax.set_xlabel(r"mixing $\mu$", fontsize=8)
-                ax.set_ylabel("NMI", fontsize=8)
-                ax.set_title(f"LFR, n = {n_}", fontsize=8)
-                ax.tick_params(labelsize=7)
+                ax.set_xlabel(r"mixing $\mu$", fontsize=7)
+                ax.set_title(f"LFR, n = {n_}", fontsize=7)
+                ax.tick_params(labelsize=6)
                 ax.grid(True, lw=0.3, alpha=0.5)
-            axes[0, 0].legend(fontsize=6, frameon=False)
-            fig.tight_layout()
+            axes[0, 0].set_ylabel("NMI", fontsize=7)
+            h, l = axes[0, 0].get_legend_handles_labels()
+            fig.legend(h, l, loc="lower center", ncol=5, fontsize=5.5, frameon=False, handlelength=1.5, columnspacing=0.8)
+            fig.tight_layout(rect=(0, 0.1, 1, 1))
             fig.savefig(os.path.join(figdir, "fig-community.pdf"))
             plt.close(fig)
         real = c[~c["graph"].str.startswith("LFR") & ~c["graph"].str.startswith("PP")]

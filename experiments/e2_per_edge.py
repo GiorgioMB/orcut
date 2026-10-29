@@ -153,11 +153,11 @@ def part_b(a):
             for meth in ("pot_simplex", "pot_emd2", "ortools"):
                 if meth == "ortools" and 2 ** int(bn) > a.ortools_max:
                     continue
-                vals, ts, tb, done = B.run_local(g, ids, meth, reps=2, budget_s=budget)
+                vals, ts, tb, done = B.run_local(g, ids, meth, reps=2, budget_s=budget, max_pairs=5e7)
                 row[f"{meth}_s"] = ts
                 row["build_s"] = tb
                 row[f"{meth}_timed"] = done
-                row[f"{meth}_maxdiff"] = float(np.nanmax(np.abs(vals[:done] - v[:done]))) if done else float("nan")
+                row[f"{meth}_maxdiff"] = float(np.nanmax(np.abs(vals - v))) if done else float("nan")
             rows.add(row)
             log(f"E2B {name:16s} bin [{row['lo']},{row['hi']}) share {row['share']:.3f} ours {1e6 * row['ours_s']:.1f}us "
                 f"pot {1e6 * row.get('pot_simplex_s', float('nan')):.1f}us build {1e6 * row.get('build_s', float('nan')):.1f}us")

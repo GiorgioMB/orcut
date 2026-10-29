@@ -66,29 +66,35 @@ class RSSSampler:
         self.peak = max(self.peak, self._rss())
 
 
-def pot_estimate(g, per_bin=50, budget_s=600.0, seed=0):
+def pot_estimate(g, per_bin=50, budget_s=600.0, seed=0, max_pairs=5e7):
     """(estimated single-threaded seconds of the POT pipeline on all edges, of its solves alone,
-    number of edges timed)."""
+    number of edges timed, share of edges counted as free). Edges whose dense local problem would
+    have more than ``max_pairs`` entries are not run and count as free, so the estimate stays a
+    lower bound."""
     rng = np.random.default_rng(seed)
     dsum = g.deg[g.edges[:, 0]] + g.deg[g.edges[:, 1]]
     bins = np.floor(np.log2(dsum)).astype(int)
+    prod = (g.deg[g.edges[:, 0]] + 1).astype(np.float64) * (g.deg[g.edges[:, 1]] + 1)
     tot_full = 0.0
     tot_solve = 0.0
     timed = 0
+    free = int(np.sum(prod > max_pairs))
     t0 = time.perf_counter()
     for bn in sorted(np.unique(bins), reverse=True):  # largest first: they dominate
-        all_ids = np.flatnonzero(bins == bn)
+        all_ids = np.flatnonzero((bins == bn) & (prod <= max_pairs))
+        if len(all_ids) == 0:
+            continue
         ids = np.sort(rng.choice(all_ids, min(per_bin, len(all_ids)), replace=False)).astype(np.int64)
         left = budget_s - (time.perf_counter() - t0)
         if left <= 0:
-            return float("nan"), float("nan"), timed
+            return float("nan"), float("nan"), timed, free / g.num_edges
         _, ts, tb, done = B.run_local(g, ids, "pot_simplex", reps=1, budget_s=left)
         if done == 0:
-            return float("nan"), float("nan"), timed
+            return float("nan"), float("nan"), timed, free / g.num_edges
         tot_full += len(all_ids) * (ts + tb)
         tot_solve += len(all_ids) * ts
         timed += done
-    return tot_full, tot_solve, timed
+    return tot_full, tot_solve, timed, free / g.num_edges
 
 
 def solve_all(g, measure, threads, diagnostics=False):
@@ -144,9 +150,10 @@ def part_real(a):
                 row["twin_ratio_hub"] = float(np.mean(d[ok, C.D_ROWS] / d[ok, C.D_GROUPS])) if ok.any() else float("nan")
                 row["twin_ratio_hub_max"] = float(np.max(d[ok, C.D_ROWS] / d[ok, C.D_GROUPS])) if ok.any() else float("nan")
                 if not a.no_pot:
-                    full, solve, timed = pot_estimate(g, per_bin=a.pot_per_bin, budget_s=a.pot_budget)
+                    full, solve, timed, free = pot_estimate(g, per_bin=a.pot_per_bin, budget_s=a.pot_budget,
+                                                            max_pairs=a.pot_max_pairs)
                     row.update(pot_est_1thread_s=full, pot_solve_est_1thread_s=solve, pot_timed=timed,
-                               pot_est_s=full / a.threads)
+                               pot_est_s=full / a.threads, pot_free_share=free)
             rows.add(row)
             log(f"E3 {name:16s} {measure:8s} m={g.num_edges:>11,} T={a.threads} {row['time_s']:9.2f}s "
                 f"peak+{peak:8.1f}MB" + (f" POT est {row.get('pot_est_s', float('nan')):9.1f}s" if measure == "lazy" else ""))
@@ -201,8 +208,9 @@ def part_synth(a):
             row = dict(family=fam, regime=regime, n=nn, avg_deg_target=d, seed=seed, m=g.num_edges,
                        deg_max=int(g.deg.max()), sum_dsum=W, sum_dsum2=W2, threads=a.threads, time_s=t)
             if not a.no_pot and g.num_edges <= a.pot_max_edges:
-                full, solve, timed = pot_estimate(g, per_bin=a.pot_per_bin, budget_s=a.pot_budget)
-                row.update(pot_est_1thread_s=full, pot_est_s=full / a.threads)
+                full, solve, timed, free = pot_estimate(g, per_bin=a.pot_per_bin, budget_s=a.pot_budget,
+                                                        max_pairs=a.pot_max_pairs)
+                row.update(pot_est_1thread_s=full, pot_est_s=full / a.threads, pot_free_share=free)
             rows.add(row)
             log(f"E3S {fam:6s} {regime:8s} n={nn:>9,} m={g.num_edges:>11,} {t:8.2f}s")
 
@@ -219,6 +227,8 @@ def main():
     ap.add_argument("--pot-per-bin", type=int, default=50)
     ap.add_argument("--pot-budget", type=float, default=1800.0, help="seconds of POT timing per graph")
     ap.add_argument("--pot-max-edges", type=int, default=5 * 10**6)
+    ap.add_argument("--pot-max-pairs", type=float, default=5e7,
+                    help="edges with (d_i+1)(d_j+1) above this count as free in the POT estimate (memory)")
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--quick", action="store_true")

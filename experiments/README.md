@@ -70,7 +70,12 @@ separately. POT's network simplex is called through its C++ entry point (`emd_c`
 overhead; `ot.emd2` (what GRC calls) is reported too. On whole graphs, the POT pipeline is timed on a
 stratified sample of edges (bins of d_i + d_j, up to 50 per bin, largest bins first), extrapolated
 to all edges with the bin counts, and divided by the number of threads; this assumes perfect
-parallel scaling and is therefore a lower bound on its parallel time.
+parallel scaling and is therefore a lower bound on its parallel time. Edges whose dense local
+problem would have more than 5 x 10^7 entries ((d_i + 1)(d_j + 1), gigabytes of cost matrix and
+plan) are not run and count as free, which keeps it a lower bound (`pot_free_share` in the table).
+The same guard protects the per-edge baselines of E1, E2, E4 and E5, and E7 skips graphs whose
+balls give more than 5 x 10^6 pairs (`--max-pairs`), which the reference implementation of the
+layered closure would list explicitly.
 
 **Exactness.** orcut returns W1 as an exact fraction; E1 compares it with OR-Tools' integer
 min-cost flow on the explicit distance matrix (exact fractions), with the independent oracle of

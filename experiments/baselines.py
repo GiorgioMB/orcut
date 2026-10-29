@@ -170,14 +170,16 @@ def _solve(method, a, b, M, L, aint, bint, reg=None) -> float:
 
 def run_local(g, ids, method: str, kind: str = "lazy", net: bool = True, reps: int = 3, include_build: bool = False,
               reg: Optional[float] = None, budget_s: Optional[float] = None, times: Optional[np.ndarray] = None,
-              btimes: Optional[np.ndarray] = None):
+              btimes: Optional[np.ndarray] = None, max_pairs: Optional[float] = None):
     """Per-edge curvature and time of a local-problem method on edges[ids].
 
     Returns (values (K,), solve seconds per edge, build seconds per edge, number timed). The solve is
     timed alone (inputs built outside the timer, fastest of ``reps`` passes); the build (support,
     distance matrix, marginals) is timed separately once. With ``budget_s`` the loop stops early
     (the remaining values are NaN). ``times`` / ``btimes`` (length K), if given, receive the
-    per-edge solve / build times (NaN where not timed)."""
+    per-edge solve / build times (NaN where not timed). With ``max_pairs``, edges with
+    (d_i + 1)(d_j + 1) > max_pairs are not built or solved (value and times NaN): their dense
+    problems would need gigabytes; a time estimate that counts them as free is a lower bound."""
     lp = LocalProblems(g, kind)
     K = len(ids)
     vals = np.full(K, np.nan)
@@ -188,10 +190,15 @@ def run_local(g, ids, method: str, kind: str = "lazy", net: bool = True, reps: i
     tsolve = 0.0
     done = 0
     if K:  # warm-up: the first call of a solver pays one-time initialization (thread pools, imports)
-        a, b, M, L, aint, bint = lp.build(int(ids[0]), net)
+        e0 = int(ids[int(np.argmin(g.deg[g.edges[ids, 0]] + g.deg[g.edges[ids, 1]]))])
+        a, b, M, L, aint, bint = lp.build(e0, net)
         _solve(method, a, b, M, L, aint, bint, reg)
     t_start = time.perf_counter()
     for k, e in enumerate(ids):
+        if max_pairs is not None:
+            di, dj = int(g.deg[g.edges[e, 0]]), int(g.deg[g.edges[e, 1]])
+            if (di + 1) * (dj + 1) > max_pairs:
+                continue
         t = time.perf_counter()
         a, b, M, L, aint, bint = lp.build(int(e), net)
         tb_k = time.perf_counter() - t
