@@ -163,6 +163,22 @@ def block_e1(R, O: Out):
     O.put("EOneCertChecked", f_int(d["cert_checked"].sum()), "e1: certificates computed")
     O.put("EOneCertFailed", f_int(d["cert_failed"].sum() + d["verify_failed"].sum()), "e1: certificates failed")
     O.put("EOneVerifyChecked", f_int(d["verify_checked"].sum()), "e1: certificates re-verified from scratch")
+    names = {"lazy": "lazy", "nonlazy": "non-lazy", "lly": "Lin--Lu--Yau", "idle:1/2": "idleness $1/2$",
+             "walk": "weighted lazy walk"}
+    lines = []
+    for meas, sub in d.groupby("measure", sort=False):
+        mm_ = 0
+        for c in ("frozen_mismatch", "oracle_mismatch", "layered_mismatch"):
+            if c in sub:
+                mm_ += int(np.nansum(sub[c].astype(float)))
+        pmax = np.nanmax(sub["pot_maxdiff"].astype(float)) if sub["pot_maxdiff"].notna().any() else float("nan")
+        lines.append(" & ".join([names.get(meas, meas), f_int(sub["graph"].nunique()), f_int(sub["m"].sum()),
+                                 f"{f_int(sub['ortools_checked'].sum())} / {f_int(sub['ortools_mismatch'].sum())}",
+                                 f_int(mm_) if meas in ("lazy", "nonlazy", "lly") else "--",
+                                 f_sci(pmax) if math.isfinite(pmax) else "--",
+                                 f"{f_int(sub['cert_checked'].sum())} / {f_int(sub['cert_failed'].sum() + sub['verify_failed'].sum())}"])
+                     + r" \\")
+    O.table("exactness", lines)
 
 
 # ------------------------------------------------------------------ E2
@@ -261,6 +277,12 @@ def block_e3(R, O: Out, figdir: str):
                                  f_num(float(r["peak_extra_mb"]), 2) if math.isfinite(float(r["peak_extra_mb"])) else "--",
                                  f_num(tw, 2) if math.isfinite(tw) else "--"]) + r" \\")
     O.table("large", lines)
+    ds = []
+    for _, r in lz.iterrows():
+        cite = str(r.get("cite", "")) if isinstance(r.get("cite", ""), str) else ""
+        ds.append(" & ".join([tex_name(r["graph"]), f_int(r["n"]), f_int(r["m"]), f_int(r["deg_max"]),
+                              f_num(float(r["deg_mean"]), 3), (r"\citet{" + cite + "}") if cite else "--"]) + r" \\")
+    O.table("datasets", ds)
     big = lz.iloc[-1]
     O.put("EThreeLargestName", tex_name(big["graph"]), "e3/real: largest graph")
     O.put("EThreeLargestEdges", f_num(big["m"]), "e3/real: edges of the largest graph")
@@ -273,6 +295,11 @@ def block_e3(R, O: Out, figdir: str):
         O.put("EThreePotSpeedupMedian", f_x(np.median(sp)), "e3/real: median POT-estimate / orcut over graphs")
         O.put("EThreePotSpeedupMax", f_x(np.max(sp)), "e3/real: max POT-estimate / orcut")
         O.put("EThreePotSpeedupMin", f_x(np.min(sp)), "e3/real: min POT-estimate / orcut")
+        if "pot_solve_est_1thread_s" in ok:
+            sp2 = ok["pot_solve_est_1thread_s"].astype(float) / ok["threads"].astype(float) / ok["time_s"].astype(float)
+            O.put("EThreePotSolveSpeedupMedian", f_x(np.nanmedian(sp2)),
+                  "e3/real: median (POT solves only, distance matrices free, perfect scaling) / orcut")
+            O.put("EThreePotSolveSpeedupMax", f_x(np.nanmax(sp2)), "e3/real: max of the same")
     if "twin_ratio_hub_max" in lz:
         O.put("EThreeTwinMax", f_num(np.nanmax(lz["twin_ratio_hub_max"].astype(float))), "e3/real: max rows/groups on hub edges")
     if "share_fast" in lz:
@@ -294,6 +321,7 @@ def block_e3(R, O: Out, figdir: str):
             t1 = float(sub[sub["threads"] == sub["threads"].min()]["time_s"].iloc[0])
             tT = float(sub[sub["threads"] == sub["threads"].max()]["time_s"].iloc[0])
             best.append((gname, int(sub["threads"].max()), t1 / tT))
+        O.table("threads", [" & ".join([tex_name(g_), f_int(T_), f_x(sp_)]) + r" \\" for g_, T_, sp_ in best])
         O.put("EThreeScalingThreads", f_int(best[0][1]), "e3/threads: max threads")
         O.put("EThreeScalingMin", f_x(min(b[2] for b in best)), "e3/threads: min speedup at max threads")
         O.put("EThreeScalingMax", f_x(max(b[2] for b in best)), "e3/threads: max speedup at max threads")
@@ -387,9 +415,9 @@ def block_e4(R, O: Out):
 
 # ------------------------------------------------------------------ E5
 
-E5_ORDER = [("grc-mix", "GRC default (mixed)"), ("grc-otd", "GRC OTD"), ("grc-otd-full", "GRC OTD, no truncation"),
-            ("grc-sinkhorn", r"GRC Sinkhorn ($\varepsilon=0.1$)"), ("grc-atd", "GRC ATD"),
-            ("jl", "Jost--Liu mean"), ("bf@lly", "Balanced Forman"), ("af3@lly", "AF$_3$")]
+E5_ORDER = [("grc-mix", "GRC default"), ("grc-otd", "GRC OTD"), ("grc-otd-full", "GRC OTD, all nbrs."),
+            ("grc-sinkhorn", "GRC Sinkhorn"), ("grc-atd", "GRC ATD"),
+            ("jl", "JL mean"), ("bf@lly", "BF"), ("af3@lly", "AF$_3$")]
 
 
 def block_e5(R, O: Out, figdir: str):
@@ -596,9 +624,11 @@ def block_e7(R, O: Out):
     try:
         d = load(R, "e7/measures.csv")
         lines = []
+        pretty = {"lazy": "lazy", "nonlazy": "non-lazy", "lly": "Lin--Lu--Yau", "idle 1/4": "idleness $1/4$",
+                  "idle 1/2": "idleness $1/2$", "idle 3/4": "idleness $3/4$", "weighted walk": "weighted lazy walk"}
         for meas, sub in d.groupby("measure", sort=False):
             r = sub["rel_lazy"].astype(float)
-            lines.append(f"{meas} & {f_num(np.median(r), 2)} & {f_num(np.max(r), 2)}" + r" \\")
+            lines.append(f"{pretty.get(meas, meas)} & {f_num(np.median(r), 2)} & {f_num(np.max(r), 2)}" + r" \\")
         O.table("measures", lines)
         nl = d[d["measure"] != "lazy"]["rel_lazy"].astype(float)
         O.put("ESevenRelMax", f_x(np.nanmax(nl)), "e7/measures: max time relative to lazy")
@@ -625,6 +655,19 @@ def block_e7(R, O: Out):
         O.missing.append("e7/radius.csv")
 
 
+def block_env(R, O: Out):
+    env = xio.read_json(os.path.join(R, "environment.json"), default=None)
+    if not env:
+        raise FileNotFoundError(os.path.join(R, "environment.json"))
+    cpu = str(env.get("cpu_model") or env.get("platform") or "unknown CPU")
+    O.put("EnvCpu", tex_name(cpu), "environment.json: cpu_model")
+    O.put("EnvCores", f_int(env.get("cpu_count") or 0), "environment.json: cpu_count")
+    for k, key in (("numba", "EnvNumba"), ("numpy", "EnvNumpy"), ("ot", "EnvPot"), ("ortools", "EnvOrtools"),
+                   ("networkx", "EnvNetworkx"), ("python", "EnvPython"), ("orcut", "EnvOrcut")):
+        if env.get(k):
+            O.put(key, tex_name(str(env[k])), f"environment.json: {k}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", default=common.RESULTS)
@@ -634,7 +677,8 @@ def main():
     paper = a.paper_dir or os.path.join(a.results, "paper")
     os.makedirs(paper, exist_ok=True)
     O = Out(a.provisional)
-    for name, fn in (("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
+    for name, fn in (("env", lambda: block_env(a.results, O)),
+                     ("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
                      ("E3", lambda: block_e3(a.results, O, paper)), ("E4", lambda: block_e4(a.results, O)),
                      ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O, paper)),
                      ("E7", lambda: block_e7(a.results, O))):
@@ -646,6 +690,8 @@ def main():
             O.missing.append(f"{name}: error\n" + traceback.format_exc())
     lines = ["% generated by experiments/artifacts.py -- do not edit",
              r"\makeatletter"]
+    if a.provisional:
+        lines.append(r"\def\orcutprovisional{1}")
     for k, v in sorted(O.keys.items()):
         lines.append(rf"\@namedef{{res@{k}}}{{{v}}}")
     for k, v in sorted(O.rows.items()):

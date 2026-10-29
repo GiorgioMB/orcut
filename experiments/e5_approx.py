@@ -45,7 +45,7 @@ import registry as R
 
 GRAPHS = ["bundled:yeast", "bundled:arxiv", "real:Deezer", "real:Twitch-DE", "real:Facebook", "real:Squirrel",
           "real:Crocodile", "real:Amazon-Computers", "real:Enron", "real:AstroPh", "real:GitHub", "real:Epinions",
-          "synth:ER:20000:20:0", "synth:CL2.1:30000:12:0"]
+          "synth:ER:20000:20:0", "synth:CL2.1:10000:16:0", "synth:CL2.1:30000:12:0"]
 GRC_METHODS = [("grc-mix", "OTDSinkhornMix", 3000), ("grc-otd", "OTD", 3000), ("grc-otd-full", "OTD", 10**9),
                ("grc-sinkhorn", "Sinkhorn", 3000), ("grc-atd", "ATD", 3000)]
 HALF = Fraction(1, 2)

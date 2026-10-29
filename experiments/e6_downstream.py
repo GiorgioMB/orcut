@@ -127,7 +127,7 @@ def part_borf(a):
     for spec in graphs:
         name, g, meta = R.load(spec, a.data_dir)
         base = dict(graph=name, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"], loops=a.loops, add=a.add,
-                    remove=a.remove, threads=a.threads)
+                    remove=a.remove, threads=a.threads, cite=meta.get("cite", ""))
         finals = {}
         for backend, inc in (("orcut-full", False), ("orcut-incremental", True)):
             if rows.done(graph=name, backend=backend):
