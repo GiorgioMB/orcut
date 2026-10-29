@@ -70,3 +70,75 @@ def exact(graph, which: Sequence[str] = ("c_OR", "c_OR0", "c_LLY"), edges: Optio
         if flags[k]:
             out[name] = raw[:, k]
     return out
+
+
+# ------------------------------------------------------------------ orcut >= 1.1
+
+def curvature(graph, measure="lazy", edges: Optional[np.ndarray] = None, n_jobs: Optional[int] = None,
+              exact_fraction: bool = False, diagnostics: bool = False, flags: Optional[int] = None):
+    """Exact curvature 1 - W1(m_i, m_j) of the undirected edges of ``graph`` (all, or the edge ids
+    ``edges``), aligned with ``graph.edges``.
+
+    ``measure``: ``"lazy"`` (default, idleness 1/(deg+1)), ``"nonlazy"``, ``"lly"`` (Lin--Lu--Yau),
+    a number or Fraction p in [0, 1) (uniform idleness p), or a :class:`orcut.measures.Walk`
+    (weighted walk with rational idleness). With ``exact_fraction`` the result also contains the
+    exact value of W1 as an integer fraction (numerator, denominator) per edge (for ``"lly"``,
+    curvature = (1 - W1) (deg_max + 1) / deg_max); with ``diagnostics`` the per-edge diagnostics of
+    :mod:`orcut._core` (``N_DIAG`` columns). ``flags`` switches off engineering steps (ablations;
+    values do not change). Returns an array, or a dict when extra outputs are requested.
+    """
+    from . import _core as C
+    from .measures import parse
+
+    g = as_graph(graph)
+    mode, pn, pd, tabs = parse(measure, g)
+    import numba
+
+    ids = np.arange(g.num_edges, dtype=np.int64) if edges is None else np.ascontiguousarray(edges, dtype=np.int64)
+    with threads(n_jobs):
+        val, num, diag = C.core_ids(g.indptr, g.indices, g.edges, ids, mode, pn, pd,
+                                    C.F_ALL if flags is None else flags, 8 * numba.get_num_threads(), tabs)
+    if not (exact_fraction or diagnostics):
+        return val
+    out = {"curvature": val}
+    if exact_fraction:
+        out["w1_num"] = num[:, 0]
+        out["w1_den"] = num[:, 1]
+    if diagnostics:
+        out["diagnostics"] = diag
+    return out
+
+
+def ball_curvature(graph, radius: int = 2, edges: Optional[np.ndarray] = None, n_jobs: Optional[int] = None,
+                   certify: bool = False):
+    """Curvature for m_u uniform on the ball of radius ``radius`` around u (Ollivier's ball
+    measures), exact, by the layered closure with D = 2 radius + 1 (reference implementation:
+    explicit distances). With ``certify`` the diagnostics report, per edge, whether the plan and the
+    potentials of the minimum cut were verified (column 5: 1 = verified)."""
+    from . import _layered as LY
+
+    g = as_graph(graph)
+    ids = np.arange(g.num_edges, dtype=np.int64) if edges is None else np.ascontiguousarray(edges, dtype=np.int64)
+    import numba
+
+    with threads(n_jobs):
+        val, diag = LY.layered_ids(g.indptr, g.indices, g.edges, ids, LY.K_BALL, radius, certify,
+                                   8 * numba.get_num_threads())
+    return (val, diag) if certify else val
+
+
+def walk_curvature(graph, steps: int = 2, lazy: bool = True, edges: Optional[np.ndarray] = None,
+                   n_jobs: Optional[int] = None, certify: bool = False):
+    """Curvature for the ``steps``-step random walk (lazy: uniform on N[v] at every step), by the
+    layered closure with D = 2 steps + 1; masses are rounded to 2^-40 (error of W1 at most
+    D (|B_i| + |B_j|) 2^-40)."""
+    from . import _layered as LY
+
+    g = as_graph(graph)
+    ids = np.arange(g.num_edges, dtype=np.int64) if edges is None else np.ascontiguousarray(edges, dtype=np.int64)
+    import numba
+
+    with threads(n_jobs):
+        val, diag = LY.layered_ids(g.indptr, g.indices, g.edges, ids, LY.K_WALK_LAZY if lazy else LY.K_WALK,
+                                   steps, certify, 8 * numba.get_num_threads())
+    return (val, diag) if certify else val
