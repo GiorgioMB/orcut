@@ -221,7 +221,8 @@ def block_e2(R, O: Out, figdir: str):
     O.put("ETwoDistBytesMax", f_num(d["pot_input_bytes"].max() / 2**20) + r"\,MB", "e2: POT cost matrix at largest size")
     # figure: two panels per sweep, regime 'mixed' (others in the appendix figure)
     for name, regimes in (("fig-per-edge.pdf", ["mixed"]), ("fig-per-edge-all.pdf", list(g["regime"].unique()))):
-        fig, axes = plt.subplots(len(regimes), 2, figsize=(6.75, 2.1 * len(regimes)), squeeze=False)
+        fig, axes = plt.subplots(len(regimes), 2, figsize=(6.75, 2.1 if len(regimes) == 1 else 1.55 * len(regimes)),
+                                 squeeze=False)
         for r_i, regime in enumerate(regimes):
             for c_i, sweep in enumerate(["sym", "hub"]):
                 ax = axes[r_i, c_i]
