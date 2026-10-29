@@ -20,9 +20,10 @@
   column; warm start). It has at most 3 m_ij + 2 nodes and 5 m_ij arcs, m_ij the sum of the degrees
   of P and N, and is built in O(m_ij) from the adjacency lists, with no bitsets and no distances.
   Exact fractions identical to `orcut.curvature` (tested for six measures and every flag).
-- Experiments: the graph min-cost-flow formulation of W1 (Beckmann's problem on the edges incident to
-  N[i] u N[j], OR-Tools) as a baseline in E2 and E4; the solver without witness relays and the
-  witness network alone in E2 and E4; network sizes against the local input in E2.
+- Experiments: the graph min-cost-flow formulation of W1 (Beckmann's problem on the edge ij and the
+  edges with an endpoint in P u N, OR-Tools) as a baseline in E2 and E4; the solver without witness relays and the
+  witness network alone in E2 and E4; network sizes against the local input in E2; E2 part C, the
+  lower-bound instances of DasGupta, Grigorescu and Mukherjee (2023) up to n = 2^20.
 
 ## 1.1.0
 

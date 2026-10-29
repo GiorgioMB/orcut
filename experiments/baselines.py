@@ -226,22 +226,23 @@ def run_local(g, ids, method: str, kind: str = "lazy", net: bool = True, reps: i
 # ----------------------------------------------- graph min-cost flow (Beckmann)
 
 @njit(cache=True)
-def _graph_flow_arcs(indptr, indices, S, stamp, loc, ep):
-    """Vertices S first, then the other neighbours of S; arcs: every edge incident to S, in both
-    directions (each edge inside S once per direction). Returns (number of vertices, tails, heads)."""
-    nS = S.shape[0]
-    for a in range(nS):
-        stamp[S[a]] = ep
-        loc[S[a]] = a
-    nv = nS
-    tot = 0
-    for a in range(nS):
-        tot += indptr[S[a] + 1] - indptr[S[a]]
+def _graph_flow_arcs(indptr, indices, T, i, j, stamp, loc, ep):
+    """Vertices T (those with non-zero net mass) first, then the other endpoints; arcs: every edge
+    with an endpoint in T, and the edge ij, in both directions (each edge once per direction).
+    Returns (number of vertices, tails, heads)."""
+    nT = T.shape[0]
+    for a in range(nT):
+        stamp[T[a]] = ep
+        loc[T[a]] = a
+    nv = nT
+    tot = 1
+    for a in range(nT):
+        tot += indptr[T[a] + 1] - indptr[T[a]]
     tl = np.empty(2 * tot, np.int32)
     hd = np.empty(2 * tot, np.int32)
     m = 0
-    for a in range(nS):
-        x = S[a]
+    for a in range(nT):
+        x = T[a]
         for t in range(indptr[x], indptr[x + 1]):
             w = indices[t]
             if stamp[w] != ep:
@@ -249,24 +250,42 @@ def _graph_flow_arcs(indptr, indices, S, stamp, loc, ep):
                 loc[w] = nv
                 nv += 1
             b = loc[w]
-            if b < nS and b < a:
-                continue  # an edge inside S, already added from its other endpoint
+            if b < nT and b < a:
+                continue  # an edge inside T, already added from its other endpoint
             tl[m] = a
             hd[m] = b
             m += 1
             tl[m] = b
             hd[m] = a
             m += 1
+    i_in = stamp[i] == ep and loc[i] < nT
+    j_in = stamp[j] == ep and loc[j] < nT
+    if not i_in and not j_in:  # the edge ij is not incident to T: add it (paths x, i, j, y)
+        if stamp[i] != ep:
+            stamp[i] = ep
+            loc[i] = nv
+            nv += 1
+        if stamp[j] != ep:
+            stamp[j] = ep
+            loc[j] = nv
+            nv += 1
+        tl[m] = loc[i]
+        hd[m] = loc[j]
+        m += 1
+        tl[m] = loc[j]
+        hd[m] = loc[i]
+        m += 1
     return nv, tl[:m], hd[:m]
 
 
 class GraphFlowProblems:
     """W1 as a min-cost flow on the graph itself (Beckmann's formulation; e.g. Peyre and Cuturi,
-    2019, ch. 6): supplies m_i - m_j on S = N[i] u N[j], uncapacitated arcs of unit cost along every
-    edge incident to S. Shortest paths between points of S use only such edges (a common neighbour,
-    or the path through i and j), so the optimum is W1 exactly. Like orcut, it needs no distance
-    matrix; unlike orcut, it is a min-cost flow on the whole 2-hop neighbourhood. Solved with
-    OR-Tools' integer min-cost flow (exact)."""
+    2019, ch. 6): supplies m_i - m_j on the vertices T where they do not vanish, uncapacitated arcs
+    of unit cost along every edge with an endpoint in T and along the edge ij. An optimal plan can be
+    routed along shortest paths of this kind (one edge xy; x, w, y; x, i, y; x, j, y; or x, i, j, y),
+    so the optimum is W1 exactly, and the network has at most sum_{x in T} deg(x) + 1 edges, the
+    size of orcut's witness network. Like orcut, it needs no distance matrix; unlike orcut, it is a
+    min-cost flow. Solved with OR-Tools' integer min-cost flow (exact)."""
 
     def __init__(self, g, kind: str = "lazy"):
         self.g = g
@@ -285,10 +304,12 @@ class GraphFlowProblems:
         di, dj = int(g.deg[i]), int(g.deg[j])
         (si, ni), (sj, nj), L = measure_weights(self.kind, di, dj)
         w = RF._net(S, g.indptr, g.indices, i, j, si, ni, sj, nj)
+        nz = w != 0
+        T = np.ascontiguousarray(S[nz])
         self.ep += 1
-        nv, tl, hd = _graph_flow_arcs(g.indptr, g.indices, S, self.stamp, self.loc, self.ep)
+        nv, tl, hd = _graph_flow_arcs(g.indptr, g.indices, T, i, j, self.stamp, self.loc, self.ep)
         sup = np.zeros(nv, np.int64)
-        sup[:len(S)] = w
+        sup[:len(T)] = w[nz]
         smcf = min_cost_flow.SimpleMinCostFlow()
         tot = int(np.abs(w).sum())
         smcf.add_arcs_with_capacity_and_unit_cost(tl, hd, np.full(len(tl), max(tot, 1), np.int64),

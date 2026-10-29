@@ -719,7 +719,7 @@ def block_e6(R, O: Out, figdir: str):
                 O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
             import matplotlib.pyplot as plt
 
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(2.75, 2.0), squeeze=False, sharey=True)
+            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(2.75, 1.75), squeeze=False, sharey=True)
             for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
                 for meth, lab in methods:
                     ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()

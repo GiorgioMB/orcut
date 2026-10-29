@@ -81,10 +81,11 @@ layered closure would list explicitly.
 
 **Graph min-cost flow (Beckmann).** W1 on the hop metric is also the minimum cost of a flow on the
 graph itself, with unit cost per edge, supply m_i - m_j, and no distance matrix (Beckmann's
-formulation). For one-step measures an optimal flow uses only edges incident to N[i] u N[j] (every
-pair is joined by a shortest path of length at most 3 of this kind), so `baselines.GraphFlowProblems`
-solves the min-cost flow on these edges, in both directions, with OR-Tools' `SimpleMinCostFlow`
-(integer masses, exact). It is the strongest distance-free baseline we know; its time includes
+formulation). For one-step measures an optimal flow uses only the edge ij and edges with an endpoint
+in P u N, the vertices with non-zero net mass (every pair is joined by a shortest path of length at
+most 3 of this kind: xy; x, w, y; x, i, j, y), so `baselines.GraphFlowProblems` solves the min-cost
+flow on these edges, in both directions, with OR-Tools' `SimpleMinCostFlow` (integer masses,
+exact). The network has at most sum_{x in P u N} deg(x) + 1 edges, the size of the witness network. It is the strongest distance-free baseline we know; its time includes
 building the arcs (numba) and is otherwise measured like the other baselines (E2, E4).
 
 **Exactness.** orcut returns W1 as an exact fraction; E1 compares it with OR-Tools' integer
