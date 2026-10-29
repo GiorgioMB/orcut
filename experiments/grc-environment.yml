@@ -1,20 +1,28 @@
-# Environment for the GraphRicciCurvature baseline (experiments/grc_runner.py), which caps scipy <= 1.13.
+# Environment for the GraphRicciCurvature baseline (experiments/grc_runner.py). GRC 0.6.1 caps
+# scipy <= 1.13.1, so it cannot share the orcut environment. Everything below is on conda-forge
+# except GRC itself, which is pure Python (one wheel, no compiled code):
+#
 #   conda env create -f experiments/grc-environment.yml && conda activate orcut-grc
-#   git clone https://github.com/saibalmars/GraphRicciCurvature && git -C GraphRicciCurvature checkout v0.5.3.2
-#   pip install --no-index --no-deps --no-build-isolation ./GraphRicciCurvature    # pure Python, from source
-#   pip install --no-index --no-deps --no-build-isolation -e .                     # orcut (for the graph loaders)
-# (GraphRicciCurvature is not on conda-forge; clone it on a node with network access if needed.)
+#   # on any machine with PyPI access, fetch the wheel once and copy it to the cluster:
+#   pip download GraphRicciCurvature==0.6.1 --no-deps -d wheels/
+#   # on the cluster (no index needed):
+#   pip install --no-index --no-deps wheels/graphriccicurvature-0.6.1-py3-none-any.whl
+#   export ORCUT_GRC_PYTHON=$(which python)      # the experiments call grc_runner.py with it
+#
+# (Alternatively, clone https://github.com/saibalmars/GraphRicciCurvature at the 0.6.1 release and
+#  pip install --no-index --no-deps --no-build-isolation it.) The runner imports neither orcut nor
+# numba; the experiments were tested with GRC 0.6.1, NetworKit 11.2, POT 0.9.7, SciPy 1.13.1.
 name: orcut-grc
 channels:
   - conda-forge
 dependencies:
   - python=3.12
-  - numpy=2.2
-  - scipy=1.13
-  - numba=0.62
+  - numpy=2.0
+  - scipy=1.13.1
   - networkx=3.3
-  - networkit
+  - networkit>=11
+  - python-louvain
+  - cython
+  - packaging
   - pot=0.9
-  - pandas
-  - setuptools>=68
   - pip
