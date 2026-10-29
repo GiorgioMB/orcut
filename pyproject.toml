@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orcut"
+version = "1.0.0"
+description = "Exact Ollivier-Ricci curvature of graphs with one minimum cut per edge"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "numba==0.62.1",
+    "numpy==2.2.0",
+    "scipy==1.16.2",
+]
+
+[project.optional-dependencies]
+dev = ["hypothesis==6.168.0", "pytest==8.4.2", "networkx==3.3"]
+
+[tool.setuptools]
+packages = ["orcut"]
