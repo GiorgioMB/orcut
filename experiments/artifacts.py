@@ -134,6 +134,15 @@ def tex_name(s: str) -> str:
     return s.replace("mu=", r"$\mu{=}$")
 
 
+def short_name(s: str) -> str:
+    """A graph name without its parameters, for narrow table headers: 'CL2.1(50k, 10)' -> 'CL2.1'."""
+    import re
+
+    s = re.sub(r"\s*\(.*\)\s*$", "", str(s))
+    return {"arXiv HepPh": "arXiv", "Amazon-Computers": "Amazon-C.", "Amazon-Photo": "Amazon-P.",
+            "Coauthor-Physics": "Coauthor-P."}.get(s, s)
+
+
 def load(results: str, rel: str):
     import pandas as pd
 
@@ -183,11 +192,11 @@ def block_e1(R, O: Out):
 
 # ------------------------------------------------------------------ E2
 
-E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut without witness relays", (0, (4, 1.5)), "."),
+E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut, no witness relays", (0, (4, 1.5)), "."),
               ("witness", "witness network alone", (0, (1, 1)), "P"),
-              ("graphflow", "graph min-cost flow (Beckmann)", "-.", "*"),
-              ("pot", "POT emd (given $D$)", "--", "s"), ("emd2", "ot.emd2 (given $D$)", ":", "^"),
-              ("ortools", "OR-Tools (given $D$)", "-.", "D"), ("highs", "HiGHS LP (given $D$)", ":", "v"),
+              ("graphflow", "graph min-cost flow", "-.", "*"),
+              ("pot", "POT (given distances)", "--", "s"), ("emd2", "ot.emd2 (given distances)", ":", "^"),
+              ("ortools", "OR-Tools (given distances)", "-.", "D"), ("highs", "HiGHS (given distances)", ":", "v"),
               ("oracle", "previous solver", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
 FIG_W = 5.5  # text width of the paper (inches)
@@ -298,7 +307,7 @@ def block_e2(R, O: Out, figdir: str):
     # figure: two panels per sweep, regime 'mixed' (others in the appendix figure)
     for name, regimes, keys in (("fig-per-edge.pdf", ["mixed"], E2_MAIN),
                                 ("fig-per-edge-all.pdf", list(g["regime"].unique()), [m[0] for m in E2_METHODS])):
-        fig, axes = plt.subplots(len(regimes), 2, figsize=(FIG_W, 2.15 if len(regimes) == 1 else 1.5 * len(regimes)),
+        fig, axes = plt.subplots(len(regimes), 2, figsize=(FIG_W, 2.3 if len(regimes) == 1 else 1.5 * len(regimes)),
                                  squeeze=False)
         for r_i, regime in enumerate(regimes):
             for c_i, sweep in enumerate(["sym", "hub"]):
@@ -309,7 +318,9 @@ def block_e2(R, O: Out, figdir: str):
                     if key in keys and col in sub and sub[col].notna().any():
                         ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, label=lab)
                 if "build_s" in sub:
-                    ax.loglog(sub["s"], sub["build_s"], color="0.6", lw=0.8, label="build $D$ only")
+                    ax.loglog(sub["s"], sub["build_s"], color="0.6", lw=0.8, label="distances only")
+                from matplotlib.ticker import NullFormatter
+                ax.xaxis.set_minor_formatter(NullFormatter())
                 ax.set_xlabel(r"$|\mathcal{U}_i| = |\mathcal{U}_j|$" if sweep == "sym" else r"$|\mathcal{U}_j|$ ($|\mathcal{U}_i| = 32$)",
                               fontsize=7)
                 ax.set_ylabel("seconds per edge", fontsize=7)
@@ -317,7 +328,13 @@ def block_e2(R, O: Out, figdir: str):
                 ax.tick_params(labelsize=6)
                 ax.grid(True, which="major", lw=0.3, alpha=0.5)
         h, l = axes[0, 0].get_legend_handles_labels()
-        fig.legend(h, l, loc="lower center", ncol=4, fontsize=5.5, frameon=False)
+        for ax_ in axes.flat:  # methods that appear only in some panels
+            for hh, ll in zip(*ax_.get_legend_handles_labels()):
+                if ll not in l:
+                    h.append(hh)
+                    l.append(ll)
+        fig.legend(h, l, loc="lower center", ncol=4 if len(l) <= 8 else 5, fontsize=6, frameon=False,
+                   handlelength=1.8, columnspacing=1.0)
         fig.tight_layout(rect=(0, 0.17 if len(regimes) == 1 else 0.05, 1, 1))
         fig.savefig(os.path.join(figdir, name))
         plt.close(fig)
@@ -368,7 +385,7 @@ def block_e2c(R, O: Out):
         if math.isfinite(float(last.get("graphflow_s", float("nan")))):
             gf.append(float(last["graphflow_s"]) / float(last["ours_s"]))
         lines.append(" & ".join([names.get(kind, kind), f_int(last["n"]), f_int(last["local_input"]), f_int(last["arcs"]),
-                                 f_time(last["ours_s"]), f_time(last["witness_s"]),
+                                 f_time(last["ours_s"]),
                                  f_time(last["graphflow_s"]) if math.isfinite(float(last.get("graphflow_s", float("nan")))) else "--",
                                  (f"{f_time(lp['pot_s'] + lp.get('build_s', 0.0))} ($n={f_int(lp['n'])}$)" if len(okp) else "--"),
                                  f_num(k, 2) if math.isfinite(k) else "--"]) + r" \\")
@@ -494,8 +511,8 @@ E4_ORDER = [("cut", "two-layer cut, bitsets"), ("+relays", "+ relays $H_1,\\dots
             ("+fast", "+ fast path"), ("+warm", "+ warm start"), ("full", "+ witness relays (orcut)"),
             ("-relays", "full $-$ all relays"), ("-twins", "full $-$ twins"), ("-fast", "full $-$ fast path"),
             ("-warm", "full $-$ warm start"), ("witness", "witness network alone"),
-            ("graphflow", "graph min-cost flow (Beckmann)"), ("oracle", "previous solver (explicit $D$)"),
-            ("pot", "explicit $D$ + POT")]
+            ("graphflow", "graph min-cost flow"), ("oracle", "previous solver"),
+            ("pot", "distance matrix + POT")]
 E4_RULE_AFTER = ("full", "-warm")
 
 
@@ -517,7 +534,8 @@ def block_e4(R, O: Out):
         if cfg in E4_RULE_AFTER:
             lines.append(r"\midrule")
     O.table("ablation", lines)
-    O.table("ablation-head", [" & ".join(["configuration"] + [tex_name(g) for g in graphs]) + r" \\"])
+    O.table("ablation-head", [" & ".join(["configuration"] + [r"\rotatebox{70}{" + tex_name(short_name(g)) + "}" for g in graphs])
+                              + r" \\"])
     O.put("EFourGraphs", f_int(len(graphs)), "e4: graphs")
     # headline: full vs cut, median over graphs; twins on the most hub-dominated graph
     rat, tw = [], []
@@ -701,7 +719,7 @@ def block_e6(R, O: Out, figdir: str):
                 O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
             import matplotlib.pyplot as plt
 
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(3.3, 2.0), squeeze=False, sharey=True)
+            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(2.75, 2.0), squeeze=False, sharey=True)
             for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
                 for meth, lab in methods:
                     ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()
