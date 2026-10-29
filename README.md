@@ -43,9 +43,11 @@ With pip and network access: `pip install "orcut @ git+https://github.com/Giorgi
 ## Versions
 
 * **1.2.0**: witness relays (one zero-weight relay per common neighbour) for the pairs at distance 2
-  that the bitset network would list one by one, chosen per edge when the network gets smaller; the
-  linear-size witness network on its own (`orcut._witness`); graph min-cost flow (Beckmann) as a
-  baseline in the experiments. Values unchanged (tested).
+  that the bitset network would list one by one, chosen per edge when the network gets smaller; a
+  bound on the bitset work (four words per adjacency entry) beyond which an edge is solved on the
+  linear-size witness network (`orcut._witness`, also usable on its own); graph min-cost flow
+  (Beckmann) and the lower-bound instances of DasGupta et al. (2023) in the experiments. Values
+  unchanged (tested).
 * **1.1.0**: `orcut.curvature` (any one-step measure, exact fractions, diagnostics, ablation
   flags), certificates (`orcut.certify`), the layered closure for supports of radius r
   (`ball_curvature`, `walk_curvature`), exact incremental updates (`affected_edges`), and the
