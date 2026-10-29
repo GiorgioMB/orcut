@@ -25,7 +25,13 @@ Part B (real graphs, ``--part B``): edges binned by d_i + d_j (powers of two); u
 ``--per-bin`` edges per bin; per-edge time of each method per bin, and the time per edge of the
 whole graph estimated from the bin shares.
 
-Usage: python e2_per_edge.py --part A|B [--out results] [--quick]
+Part C (``--part C``): the instances of the query lower bounds of DasGupta, Grigorescu and Mukherjee
+(2023) (``datasets.dasgupta_instance``), with n = |L| = |R| up to 2^20: the local input is O(n), so
+the solver should take linear time, while a method that works on the distance matrix needs its n^2
+entries. Methods: ours, witness, graphflow, and POT given the distance matrix (with its build time)
+while n^2 <= --max-pairs.
+
+Usage: python e2_per_edge.py --part A|B|C [--out results] [--quick]
 """
 from __future__ import annotations
 
@@ -193,9 +199,64 @@ def part_b(a):
                 f"pot {1e6 * row.get('pot_simplex_s', float('nan')):.1f}us build {1e6 * row.get('build_s', float('nan')):.1f}us")
 
 
+def part_c(a):
+    from orcut import _core as C, _witness as WT
+
+    rows = Rows(f"{out_dir(a.out, 'e2')}/dasgupta.csv", ["kind", "n", "seed"])
+    sizes = [2 ** k for k in range(8, 21, 2)] if not a.quick else [2 ** 8, 2 ** 10, 2 ** 12]
+    dead = {}
+    for kind in D.DASGUPTA_KINDS:
+        for n_ in sizes:
+            for seed in range(1 if a.quick else 2):
+                if rows.done(kind=kind, n=n_, seed=seed):
+                    continue
+                nv, e = D.dasgupta_instance(n_, kind, seed)
+                g = D.to_graph(nv, e)
+                eid = np.array([g.edge_id(0, 1)], np.int64)
+                v, num, d = C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)
+                ref = float(v[0])
+                row = dict(kind=kind, n=n_, seed=seed, m=g.num_edges, path=int(d[0, C.D_PATH]), nodes=int(d[0, C.D_NODES]),
+                           arcs=int(d[0, C.D_ARCS]), value=ref,
+                           local_input=int(g.deg[g.neighbors(0)].sum() + g.deg[g.neighbors(1)].sum()))
+                methods = ["ours", "witness", "graphflow", "pot"]
+                pot_ok = (n_ + 2) ** 2 <= a.max_pairs
+                if pot_ok:
+                    lp = B.LocalProblems(g, "lazy")
+                    tb, prob = _time_repeated(lambda: lp.build(int(eid[0]), True), min_total=0.1, max_reps=50)
+                    pa, pb, M, L, aint, bint = prob
+                    row["build_s"] = tb
+                gp = B.GraphFlowProblems(g, "lazy")
+                for meth in methods:
+                    key = (kind, meth)
+                    if (key in dead and n_ > dead[key]) or (meth == "pot" and not pot_ok):
+                        row[f"{meth}_s"] = float("nan")
+                        continue
+                    if meth == "ours":
+                        f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
+                    elif meth == "witness":
+                        f = lambda: WT.witness_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
+                    elif meth == "graphflow":
+                        f = lambda: gp.curvature(int(eid[0]))[0]
+                    else:
+                        f = lambda: 1.0 - B.pot_emd_c(pa, pb, M)
+                    t0 = time.perf_counter()
+                    v0 = f()
+                    once = time.perf_counter() - t0
+                    if once > a.budget:
+                        dead[key] = n_
+                        tm, val = once, v0
+                    else:
+                        tm, val = _time_repeated(f, min_total=min(0.5, 10 * once + 0.05), max_reps=200, warm=False)
+                    row[f"{meth}_s"] = tm
+                    row[f"{meth}_err"] = abs(float(val) - ref)
+                rows.add(row)
+                log(f"E2C {kind:8s} n={n_:8d} m={g.num_edges:9d} path={row['path']} arcs={row['arcs']:8d} "
+                    + " ".join(f"{m}={1e3 * row.get(m + '_s', float('nan')):.3f}ms" for m in methods))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--part", choices=["A", "B"], required=True)
+    ap.add_argument("--part", choices=["A", "B", "C"], required=True)
     ap.add_argument("--graphs", nargs="+", default=None)
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)
@@ -203,6 +264,7 @@ def main():
     ap.add_argument("--budget", type=float, default=30.0, help="seconds per solve above which a method stops growing")
     ap.add_argument("--per-bin", type=int, default=200)
     ap.add_argument("--ortools-max", type=int, default=4096, help="largest d_i + d_j bin for OR-Tools")
+    ap.add_argument("--max-pairs", type=float, default=5e7, help="part C: largest distance matrix given to POT")
     ap.add_argument("--quick", action="store_true")
     a = ap.parse_args()
     if a.quick:
@@ -210,7 +272,7 @@ def main():
     import numba
     numba.set_num_threads(1)
     common.warm_jit()
-    (part_a if a.part == "A" else part_b)(a)
+    {"A": part_a, "B": part_b, "C": part_c}[a.part](a)
 
 
 if __name__ == "__main__":

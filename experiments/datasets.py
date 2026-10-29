@@ -434,6 +434,52 @@ def edge_instance(a: int, b: int, t: int, regime: str, seed: int = 0) -> Tuple[i
     return n, _unique_pairs(E[:, 0], E[:, 1])
 
 
+DASGUPTA_KINDS = ("single", "matching", "bounded", "blocks")
+
+
+def dasgupta_instance(n: int, kind: str, seed: int = 0) -> Tuple[int, np.ndarray]:
+    """The graphs of DasGupta, Grigorescu and Mukherjee (2023, Proposition 2) around the edge (0, 1):
+    L = N(0) minus 1 and R = N(1) minus 0, both of size n, no common neighbour; a pair of L x R at
+    distance 1 is an edge, a pair at distance 2 gets a middle vertex adjacent to both, and every other
+    pair is at distance 3 (path through 0 and 1). Equal degrees, so the lazy curvature is a perfect
+    matching problem with costs in {1, 2, 3} (their Fact 1). Kinds:
+
+      single    one pair at distance 1 (the instances of their Theorem 4(a));
+      matching  a random perfect matching at distance 1 (Theorem 4(b));
+      bounded   two random partners at distance 1 and two at distance 2 per vertex of L, each
+                distance-2 pair with its own middle vertex (bounded weighted degrees, Theorem 5(b));
+      blocks    about sqrt(n) middle vertices, each adjacent to sqrt(n) random vertices of L and of
+                R: about n^{3/2} pairs at distance 2 from O(n) edges.
+    """
+    rng = np.random.default_rng(seed)
+    L = np.arange(2, 2 + n)
+    R = np.arange(2 + n, 2 + 2 * n)
+    parts = [np.array([(0, 1)], np.int64), np.stack([np.zeros(n, np.int64), L], 1), np.stack([np.ones(n, np.int64), R], 1)]
+    nxt = 2 + 2 * n
+    if kind == "single":
+        parts.append(np.array([(int(rng.choice(L)), int(rng.choice(R)))], np.int64))
+    elif kind == "matching":
+        parts.append(np.stack([L, rng.permutation(R)], 1))
+    elif kind == "bounded":
+        for _ in range(2):
+            parts.append(np.stack([L, rng.permutation(R)], 1))
+        for _ in range(2):
+            mid = np.arange(nxt, nxt + n)
+            nxt += n
+            parts.append(np.stack([mid, L], 1))
+            parts.append(np.stack([mid, rng.permutation(R)], 1))
+    elif kind == "blocks":
+        k = max(1, int(round(np.sqrt(n))))
+        for _ in range(k):
+            parts.append(np.stack([np.full(k, nxt), rng.choice(L, k, replace=False)], 1))
+            parts.append(np.stack([np.full(k, nxt), rng.choice(R, k, replace=False)], 1))
+            nxt += 1
+    else:
+        raise ValueError(kind)
+    E = np.concatenate(parts)
+    return int(E.max()) + 1, _unique_pairs(E[:, 0], E[:, 1])
+
+
 # ------------------------------------------------- graphs with ground truth
 
 def email_eu_core(data_dir: Optional[str] = None) -> Tuple[int, np.ndarray, np.ndarray]:

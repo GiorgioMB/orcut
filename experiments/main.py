@@ -30,6 +30,7 @@ STEPS = {
     "e1": (["e1_exactness.py"], "exactness against OR-Tools, POT, the oracle; certificates"),
     "e2-controlled": (["e2_per_edge.py", "--part", "A"], "per-edge cost on controlled neighbourhoods"),
     "e2-real": (["e2_per_edge.py", "--part", "B"], "per-edge cost on real graphs, by degree bin"),
+    "e2-dasgupta": (["e2_per_edge.py", "--part", "C"], "the lower-bound instances of DasGupta et al., n up to 2^20"),
     "e3-real": (["e3_scale.py", "--part", "real"], "whole-graph time on real networks up to 1.2e8 edges"),
     "e3-threads": (["e3_scale.py", "--part", "threads"], "strong scaling"),
     "e3-synth": (["e3_scale.py", "--part", "synth"], "scaling on random families up to 1e7 vertices"),

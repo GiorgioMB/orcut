@@ -348,6 +348,46 @@ def block_e2(R, O: Out, figdir: str):
         O.missing.append("e2/real_bins.csv")
 
 
+def block_e2c(R, O: Out):
+    """The lower-bound instances of DasGupta et al. (2023): time against n = |L| = |R|."""
+    d = load(R, "e2/dasgupta.csv")
+    g = d.groupby(["kind", "n"]).median(numeric_only=True).reset_index()
+    names = {"single": "one pair at distance 1", "matching": "perfect matching at distance 1",
+             "bounded": "bounded weighted degrees", "blocks": "$\\sqrt n$ blocks at distance 2"}
+    lines, slopes, gf, pot = [], [], [], []
+    order = ["single", "matching", "bounded", "blocks"]
+    for kind in sorted(g["kind"].unique(), key=lambda x: order.index(x) if x in order else len(order)):
+        sub = g[g["kind"] == kind].sort_values("n")
+        k = _slope(sub["n"], sub["ours_s"])
+        slopes.append(k)
+        last = sub.iloc[-1]
+        okp = sub.dropna(subset=["pot_s"]) if "pot_s" in sub else sub.iloc[0:0]
+        if len(okp):
+            lp = okp.iloc[-1]
+            pot.append(((float(lp["pot_s"]) + float(lp.get("build_s", 0.0))) / float(lp["ours_s"]), int(lp["n"])))
+        if math.isfinite(float(last.get("graphflow_s", float("nan")))):
+            gf.append(float(last["graphflow_s"]) / float(last["ours_s"]))
+        lines.append(" & ".join([names.get(kind, kind), f_int(last["n"]), f_int(last["local_input"]), f_int(last["arcs"]),
+                                 f_time(last["ours_s"]), f_time(last["witness_s"]),
+                                 f_time(last["graphflow_s"]) if math.isfinite(float(last.get("graphflow_s", float("nan")))) else "--",
+                                 (f"{f_time(lp['pot_s'] + lp.get('build_s', 0.0))} ($n={f_int(lp['n'])}$)" if len(okp) else "--"),
+                                 f_num(k, 2) if math.isfinite(k) else "--"]) + r" \\")
+    O.table("dasgupta", lines)
+    O.put("EDasMaxN", f_int(g["n"].max()), "e2/dasgupta: largest n")
+    big = g[g["n"] == g["n"].max()]
+    O.put("EDasOursMaxTime", f_time(big["ours_s"].max()), "e2/dasgupta: time of the slowest kind at the largest n")
+    if np.isfinite(slopes).any():
+        O.put("EDasSlopeMax", f_num(np.nanmax(slopes), 2), "e2/dasgupta: max over kinds of the fitted exponent of time against n")
+        O.put("EDasSlopeMin", f_num(np.nanmin(slopes), 2), "e2/dasgupta: min over kinds of the same")
+    if pot:
+        O.put("EDasPotMaxN", f_int(max(n_ for _, n_ in pot)), "e2/dasgupta: largest n with POT (distance matrix within the guard)")
+        O.put("EDasPotOverOursMin", f_x(min(r for r, _ in pot)), "e2/dasgupta: (POT + distance matrix)/ours there, min over kinds")
+        O.put("EDasPotOverOursMax", f_x(max(r for r, _ in pot)), "e2/dasgupta: the same, max over kinds")
+    if gf:
+        O.put("EDasGraphflowOverOursMin", f_x(min(gf)), "e2/dasgupta: graph min-cost flow/ours at the largest n, min over kinds")
+        O.put("EDasGraphflowOverOursMax", f_x(max(gf)), "e2/dasgupta: the same, max over kinds")
+
+
 # ------------------------------------------------------------------ E3
 
 def block_e3(R, O: Out, figdir: str):
@@ -786,6 +826,7 @@ def main():
     O = Out(a.provisional)
     for name, fn in (("env", lambda: block_env(a.results, O)),
                      ("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
+                     ("E2C", lambda: block_e2c(a.results, O)),
                      ("E3", lambda: block_e3(a.results, O, paper)), ("E4", lambda: block_e4(a.results, O)),
                      ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O, paper)),
                      ("E7", lambda: block_e7(a.results, O))):
