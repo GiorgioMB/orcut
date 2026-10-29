@@ -6,13 +6,13 @@ nothing is copied by hand.
 
 | | question | script | paper |
 |---|---|---|---|
-| E1 | Is it exact, for every measure, and are the certificates valid? | `e1_exactness.py` | Sec. 6.1, Table 6 (app.) |
-| E2 | What does one edge cost, as a function of its neighbourhoods? | `e2_per_edge.py --part A/B` | Fig. 2, Sec. 6.2 |
-| E3 | Whole graphs: how large, how fast, how does it scale? | `e3_scale.py --part real/threads/synth` | Table 2, Fig. 5 (app.) |
-| E4 | Which engineering step buys what? | `e4_ablation.py` | Table 3 |
-| E5 | What do approximate pipelines get wrong, and at what cost? | `e5_approx.py --part whole/sinkhorn` | Table 4, Fig. 3 |
-| E6 | Does it change what curvature-based algorithms can do? | `e6_downstream.py --part borf/community` | Table 5, Fig. 4 |
-| E7 | Other measures, balls and multi-step walks | `e7_generality.py --part measures/radius` | Table 7 (app.) |
+| E1 | Is it exact, for every measure, and are the certificates valid? | `e1_exactness.py` | Sec. 5.1; Table 6 |
+| E2 | What does one edge cost, as a function of its neighbourhoods? | `e2_per_edge.py --part A/B` | Sec. 5.2; Figs. 2, 5 |
+| E3 | Whole graphs: how large, how fast, how does it scale? | `e3_scale.py --part real/threads/synth` | Sec. 5.3; Tables 1, 5, 7, 8; Fig. 6 |
+| E4 | Which engineering step buys what? | `e4_ablation.py` | Sec. 5.4; Table 2 |
+| E5 | What do approximate pipelines get wrong, and at what cost? | `e5_approx.py --part whole/sinkhorn` | Sec. 5.5; Table 3; Fig. 3 |
+| E6 | Does it change what curvature-based algorithms can do? | `e6_downstream.py --part borf/community` | Sec. 5.6; Fig. 4; Tables 4, 11, 12 |
+| E7 | Other measures, balls and multi-step walks | `e7_generality.py --part measures/radius` | Sec. 5.6 (end); Tables 9, 10 |
 
 ## Environments (no package index needed)
 
