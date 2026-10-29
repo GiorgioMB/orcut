@@ -1,7 +1,7 @@
 """Atomic writes and resumable checkpoints.
 
 Every long computation in the experiments saves what it has computed as soon
-as it has computed it, so that a job killed by the scheduler (e.g. Triton's
+as it has computed it, so that a job killed by the scheduler (e.g. at its
 wall-time limit) loses at most the unit of work that was running:
 
 * :func:`atomic_write_bytes`, :func:`atomic_json`, :func:`atomic_npz`,

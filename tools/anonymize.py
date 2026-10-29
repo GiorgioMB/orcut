@@ -36,7 +36,7 @@ REPLACEMENTS = [
     (r"curvature[_-]transfer", "companion_code"),
     (r"Curvature-Transfer-Code", "companion-code"),
 ]
-FORBIDDEN = ["micaletto", "nigrelli", "giorgio", "giorgiomb", "uchicago", "bocconi", "curvature_transfer",
+FORBIDDEN = ["micaletto", "nigrelli", "giorgio", "giorgiomb", "uchicago", "bocconi", "triton", "aalto", "curvature_transfer",
              "curvature-transfer"]
 TEXT_EXT = {".py", ".md", ".toml", ".yml", ".yaml", ".txt", ".cfg", ".sh", ".sbatch", ".tex", ".bib", ".json", ""}
 
