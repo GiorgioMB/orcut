@@ -122,9 +122,3 @@ results/
 ```
 
 `KEYS.md` lists every number of the paper with the table and statistic it comes from.
-
-## Expected cost (32 cores, 64 GB)
-
-Roughly: E1 2 h, E2 4 h (part C: minutes), E3 12--24 h (the POT estimates and Orkut dominate), E4 up to 40 h (900 s
-per configuration and graph, 15 configurations), E5 up to 1--2 days (GRC time limits), E6 6 h, E7 6 h. With the job
-array the steps run in parallel and the wall time is that of the longest step.
