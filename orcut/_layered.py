@@ -371,8 +371,9 @@ def _edge_layered(indptr, indices, i, j, kind, r, want_cert, stamp, dist, order,
     rr = 1 if (kind == K_LAZY or kind == K_NONLAZY) else r
     D = 2 * rr + 1
     diag[k, 4] = D
-    if nP == 0:
+    if nP == 0:  # m_i = m_j: W1 = 0, certified by the empty plan and the zero potential
         out[k] = 1.0
+        diag[k, 5] = 1 if want_cert else 0
         return bi
     # ---- distances P x N, by BFS from each vertex of P truncated at depth D - 1
     bi, oi, Dm = _take_i(bi, oi, nP * nN)

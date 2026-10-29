@@ -1,0 +1,20 @@
+# Environment for the GraphRicciCurvature baseline (experiments/grc_runner.py), which caps scipy <= 1.13.
+#   conda env create -f experiments/grc-environment.yml && conda activate orcut-grc
+#   git clone https://github.com/saibalmars/GraphRicciCurvature && git -C GraphRicciCurvature checkout v0.5.3.2
+#   pip install --no-index --no-deps --no-build-isolation ./GraphRicciCurvature    # pure Python, from source
+#   pip install --no-index --no-deps --no-build-isolation -e .                     # orcut (for the graph loaders)
+# (GraphRicciCurvature is not on conda-forge; clone it on a node with network access if needed.)
+name: orcut-grc
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy=2.2
+  - scipy=1.13
+  - numba=0.62
+  - networkx=3.3
+  - networkit
+  - pot=0.9
+  - pandas
+  - setuptools>=68
+  - pip

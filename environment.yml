@@ -1,0 +1,24 @@
+# conda-forge environment for orcut and its experiments (no PyPI needed):
+#   conda env create -f environment.yml && conda activate orcut
+#   pip install --no-index --no-deps --no-build-isolation -e .
+# GraphRicciCurvature (one baseline of the experiments) needs scipy <= 1.13: see
+# experiments/grc-environment.yml for its own environment.
+name: orcut
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy=2.2
+  - scipy=1.16
+  - numba=0.62
+  - setuptools>=68
+  - pip
+  # tests
+  - pytest
+  - hypothesis
+  - networkx=3.3
+  # experiments
+  - pandas
+  - matplotlib
+  - pot=0.9          # POT: network simplex and Sinkhorn baselines
+  - ortools-python   # OR-Tools integer min-cost flow baseline

@@ -1,0 +1,114 @@
+# Experiments of the orcut paper
+
+Seven experiments, each answering one question a reader of the paper will ask. Every number,
+table and figure of the paper is produced by `artifacts.py` from the result tables written here;
+nothing is copied by hand.
+
+| | question | script | paper |
+|---|---|---|---|
+| E1 | Is it exact, for every measure, and are the certificates valid? | `e1_exactness.py` | Sec. 6.1, Table 6 (app.) |
+| E2 | What does one edge cost, as a function of its neighbourhoods? | `e2_per_edge.py --part A/B` | Fig. 2, Sec. 6.2 |
+| E3 | Whole graphs: how large, how fast, how does it scale? | `e3_scale.py --part real/threads/synth` | Table 2, Fig. 5 (app.) |
+| E4 | Which engineering step buys what? | `e4_ablation.py` | Table 3 |
+| E5 | What do approximate pipelines get wrong, and at what cost? | `e5_approx.py --part whole/sinkhorn` | Table 4, Fig. 3 |
+| E6 | Does it change what curvature-based algorithms can do? | `e6_downstream.py --part borf/community` | Table 5, Fig. 4 |
+| E7 | Other measures, balls and multi-step walks | `e7_generality.py --part measures/radius` | Table 7 (app.) |
+
+## Environments (no package index needed)
+
+```bash
+conda env create -f environment.yml            # orcut: numpy, scipy, numba, POT, OR-Tools, networkx, pandas, matplotlib
+conda activate orcut
+pip install --no-index --no-deps --no-build-isolation -e .
+```
+
+GraphRicciCurvature (GRC) caps `scipy <= 1.13.1` and lives in its own environment
+(`grc-environment.yml`, instructions at the top of the file). The experiments call it through
+`grc_runner.py` in a subprocess; point them to it with `--grc-python` or `ORCUT_GRC_PYTHON`.
+Without it, the GRC rows are reported as `unavailable` and everything else runs.
+
+## Data
+
+* `data/*.csv`: Karate, Jazz, Yeast, Power Grid, arXiv HepPh (shipped).
+* 29 real networks (SNAP, the MUSAE and gnn-benchmark repositories, Planetoid, Geom-GCN, OGB),
+  from 280 to 1.17 x 10^8 edges, downloaded once and cached as `.npz` (largest connected
+  component, simple, undirected). Compute nodes usually have no network: run
+  `python experiments/datasets.py --data-dir $ORCUT_DATA` on a login node first.
+  Planetoid adjacency files are pickles; they are read with an unpickler that accepts only plain
+  containers.
+* Random graphs are generated from seeds (`datasets.py`; ER, BA, RGG, WS, Chung--Lu, planted
+  partition, LFR via networkx), and the controlled single-edge instances of E2 by
+  `datasets.edge_instance`.
+
+## Running
+
+```bash
+python experiments/main.py --list                              # steps
+bash experiments/slurm/quick.sh 4                              # whole pipeline at toy size (~5 min)
+sbatch experiments/slurm/run_all.sbatch                        # everything on one 32-core node
+sbatch experiments/slurm/array.sbatch                          # or one step per node, then:
+python experiments/main.py --steps artifacts --paper-dir ../paper/generated
+```
+
+Every step checkpoints after each result row and skips rows already present, so a job killed by
+the scheduler is resubmitted unchanged. `results/status.json` records the exit code and duration
+of every step and `results/environment.json` the machine and library versions; logs are in
+`results/logs/`.
+
+## Protocol
+
+**Timing.** All kernels are compiled before timing (`common.warm_jit`). Per-edge times are the
+fastest of several repetitions; whole-graph times are the median of three runs (one above 10^7
+edges). Single-threaded comparisons fix numba to one thread; multi-threaded ones give every
+method the same number of threads (`--threads`, 32 in the paper). Peak memory is sampled from
+`/proc/self/statm` during the solve.
+
+**Fairness to general-purpose solvers.** POT, OR-Tools and HiGHS solve the same mass-cancelled
+transport problem; they are *given* the local distance matrix, which we build with the fastest
+code we have (numba, adjacency and 2-paths, `orcut._reference`), and the build time is reported
+separately. POT's network simplex is called through its C++ entry point (`emd_c`) to avoid Python
+overhead; `ot.emd2` (what GRC calls) is reported too. On whole graphs, the POT pipeline is timed on a
+stratified sample of edges (bins of d_i + d_j, up to 50 per bin, largest bins first), extrapolated
+to all edges with the bin counts, and divided by the number of threads; this assumes perfect
+parallel scaling and is therefore a lower bound on its parallel time.
+
+**Exactness.** orcut returns W1 as an exact fraction; E1 compares it with OR-Tools' integer
+min-cost flow on the explicit distance matrix (exact fractions), with the independent oracle of
+`orcut._reference`, with the frozen kernel of orcut 1.0.0 (the solver of the companion paper), and
+with the layered closure; POT is compared in floating point. Certificates (an optimal plan and an
+optimal potential) are verified exactly by `orcut.certify` and re-verified from scratch, with BFS
+distances, by `Certificate.verify`.
+
+**GRC.** Run end to end as a user would (its shortest paths, process pool and defaults:
+`alpha = 0.5`, `OTDSinkhornMix`, `nbr_topk = 3000`), with a time limit (`--grc-timeout`, 2 h);
+all-pairs shortest paths up to 2 x 10^4 vertices (GRC materializes them as n^2 Python floats),
+pairwise beyond. When its default method times out on a graph, the other GRC methods are skipped.
+The exact reference at idleness 1/2 equals half the Lin--Lu--Yau curvature on every edge (Bourne et
+al., 2018; checked in `tests/test_certify.py`).
+
+**Incremental updates (E6).** After a batch of edge insertions and deletions, only the edges with
+an endpoint in the union of N[a] u N[b] over the changed pairs can change curvature
+(`orcut.affected_edges`, proof in its docstring and in the paper); the experiments recompute these
+and compare with a full recomputation at regular intervals (`check_mismatch`, expected 0).
+
+**Budgets.** Every baseline that can run for days has a budget (seconds per step, recorded in the
+tables), after which it is reported as not finished rather than extrapolated, except for the POT
+estimate of E3, which is extrapolated by construction and labelled as such.
+
+## Outputs
+
+```
+results/
+  e1/exactness.csv  e2/controlled.csv  e2/real_bins.csv  e3/{real,threads,synth}.csv
+  e4/ablation.csv   e5/{whole,sinkhorn}.csv  e5/values/*.npz (per-edge values)
+  e6/{borf,borf_iterations,community}.csv    e7/{measures,radius}.csv
+  paper/solver_numbers.tex  paper/KEYS.md  paper/fig-*.pdf
+```
+
+`KEYS.md` lists every number of the paper with the table and statistic it comes from.
+
+## Expected cost (32 cores, 64 GB)
+
+Roughly: E1 2 h, E2 4 h, E3 12--24 h (the POT estimates and Orkut dominate), E4 up to 25 h (900 s
+per configuration and graph), E5 up to 1--2 days (GRC time limits), E6 6 h, E7 6 h. With the job
+array the steps run in parallel and the wall time is that of the longest step.

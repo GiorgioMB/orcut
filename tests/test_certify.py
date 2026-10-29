@@ -42,3 +42,46 @@ def test_tampered_certificate_fails():
     x = next(iter(c.potential))
     c.potential[x] += 1
     assert not c.verify(g)
+
+
+def test_pn_distances_match_bfs():
+    """The numba P x N distances of certify equal truncated BFS distances (hubs included)."""
+    from orcut.certify import _bfs_all, _pn_distances, _scratch
+
+    G = nx.convert_node_labels_to_integers(nx.barabasi_albert_graph(300, 4, seed=3))
+    g = orcut.as_graph(G)
+    rng = np.random.default_rng(0)
+    for e in rng.choice(g.num_edges, 40, replace=False):
+        i, j = map(int, g.edges[e])
+        S = sorted(set(map(int, g.neighbors(i))) | set(map(int, g.neighbors(j))) | {i, j})
+        rng.shuffle(S)
+        P = np.array(S[: len(S) // 2], np.int64)
+        N = np.array(S[len(S) // 2:], np.int64)
+        Dm = _pn_distances(g.indptr, g.indices, P, N, *_scratch(g.num_nodes))
+        for a, x in enumerate(P):
+            dx = _bfs_all(g, int(x), 2)
+            for b, y in enumerate(N):
+                assert Dm[a, b] == dx.get(int(y), 3)
+
+
+def test_identical_measures_are_certified():
+    """An edge whose two balls coincide (W1 = 0) is reported as certified."""
+    g = orcut.as_graph(nx.complete_graph(6))
+    v, d = orcut.ball_curvature(g, 2, certify=True)
+    assert np.all(v == 1.0) and np.all(d[:, 5] == 1)
+    c = orcut.certify(g, (0, 1), "ball", radius=2)
+    assert c.verified and c.verify(g) and c.curvature == 1
+
+
+def test_idleness_half_is_half_lly():
+    """kappa_p = (1 - p) kappa_LLY for p >= 1 / (max degree + 1) (Bourne et al., 2018)."""
+    G = nx.convert_node_labels_to_integers(nx.powerlaw_cluster_graph(200, 4, 0.3, seed=5))
+    g = orcut.as_graph(G)
+    lly = orcut.curvature(g, "lly", exact_fraction=True)
+    for p in (Fraction(1, 2), Fraction(2, 3)):
+        out = orcut.curvature(g, p, exact_fraction=True)
+        for e in range(g.num_edges):
+            kp = 1 - Fraction(int(out["w1_num"][e]), int(out["w1_den"][e]))
+            dmax = max(int(g.deg[g.edges[e, 0]]), int(g.deg[g.edges[e, 1]]))
+            kl = (1 - Fraction(int(lly["w1_num"][e]), int(lly["w1_den"][e]))) * Fraction(dmax + 1, dmax)
+            assert kp == (1 - p) * kl

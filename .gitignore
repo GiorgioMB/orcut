@@ -6,3 +6,5 @@ __pycache__/
 results/
 *.nbi
 *.nbc
+results-quick/
+experiments/data/real/

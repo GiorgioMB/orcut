@@ -15,6 +15,7 @@ from fractions import Fraction
 from typing import Dict, List, Tuple
 
 import numpy as np
+from numba import njit
 
 from . import _layered as LY
 from .api import as_graph
@@ -37,22 +38,41 @@ class Certificate:
     scale: Fraction = Fraction(1)                # curvature = (1 - w1) * scale (LLY: (dmax + 1) / dmax)
 
     def verify(self, graph) -> bool:
-        """Re-check the certificate from scratch (BFS distances, exact rationals)."""
+        """Re-check the certificate from scratch (BFS distances in the whole graph, exact rationals):
+        the plan moves m_i onto m_j, the potential is 1-Lipschitz on every pair of P x N, and both
+        have cost w1. Distances are explored only up to the largest potential difference (a pair
+        farther apart satisfies its constraint), and exactly for the pairs of the plan."""
         g = as_graph(graph)
         net = {}
         for x, v in self.m_i.items():
             net[x] = net.get(x, Fraction(0)) + v
         for y, v in self.m_j.items():
             net[y] = net.get(y, Fraction(0)) - v
+        P = [v for v, m in net.items() if m > 0]
+        N = [v for v, m in net.items() if m < 0]
+        if any(v not in self.potential for v in P + N):
+            return False
+        span = max(self.potential[x] for x in P) - min(self.potential[y] for y in N) if P and N else 0
+        near = {}
+        full = {}
+
+        def dist(x, y):
+            if x not in near:
+                near[x] = _bfs_all(g, x, max(int(span), 0))
+            d = near[x].get(y)
+            if d is None:
+                if x not in full:
+                    full[x] = _bfs_all(g, x, 10**9)
+                d = full[x].get(y)
+            return d
+
         out, inn = {}, {}
         cost = Fraction(0)
-        dist = {}
         for x, y, f in self.plan:
-            if f <= 0:
+            d = dist(x, y)
+            if f <= 0 or d is None:
                 return False
-            if x not in dist:
-                dist[x] = _bfs_all(g, x, 10**9)
-            cost += f * dist[x][y]
+            cost += f * d
             out[x] = out.get(x, Fraction(0)) + f
             inn[y] = inn.get(y, Fraction(0)) + f
         for v, m in net.items():
@@ -61,18 +81,77 @@ class Certificate:
             if m < 0 and inn.get(v, 0) != -m:
                 return False
         dual = Fraction(0)
-        P = [v for v, m in net.items() if m > 0]
-        N = [v for v, m in net.items() if m < 0]
         for x in P:
-            if x not in dist:
-                dist[x] = _bfs_all(g, x, 10**9)
+            if x not in near:
+                near[x] = _bfs_all(g, x, max(int(span), 0))
+            dx = near[x]
             for y in N:
-                if self.potential[x] - self.potential[y] > dist[x][y]:
+                d = dx.get(y)  # None: farther than span >= potential[x] - potential[y]
+                if d is not None and self.potential[x] - self.potential[y] > d:
                     return False
             dual += net[x] * self.potential[x]
         for y in N:
             dual += net[y] * self.potential[y]
         return cost == dual == self.w1 and self.curvature == (1 - self.w1) * self.scale
+
+
+_SCR = {"n": -1, "arrays": None, "epoch": 0}
+
+
+def _scratch(n: int):
+    """Stamped O(n) scratch arrays, reused across calls (an epoch counter avoids clearing)."""
+    if _SCR["n"] < n:
+        _SCR["n"] = n
+        _SCR["arrays"] = (np.full(n, -1, np.int64), np.full(n, -1, np.int64), np.full(n, -1, np.int64),
+                          np.full(n, -1, np.int64))
+        _SCR["epoch"] = 0
+    _SCR["epoch"] += 1
+    return _SCR["arrays"] + (_SCR["epoch"],)
+
+
+@njit(cache=True)
+def _pn_distances(indptr, indices, P, N, posN, stampN, ghead, gstamp, ep):
+    """Hop distances (capped at 3) between the vertices of P and of N (disjoint), as an int64
+    |P| x |N| matrix: 1 on edges, 2 on pairs joined by a 2-path, 3 otherwise. Work proportional to
+    the degrees of P and N plus the number of P-w-N 2-paths."""
+    nP = P.shape[0]
+    nN = N.shape[0]
+    Dm = np.full((nP, nN), 3, np.int64)
+    for b in range(nN):
+        posN[N[b]] = b
+        stampN[N[b]] = ep
+    tot = 0
+    for a in range(nP):
+        tot += indptr[P[a] + 1] - indptr[P[a]]
+    gnext = np.empty(tot, np.int64)
+    gwho = np.empty(tot, np.int64)
+    m = 0
+    for a in range(nP):
+        x = P[a]
+        for t in range(indptr[x], indptr[x + 1]):
+            w = indices[t]
+            if stampN[w] == ep:
+                Dm[a, posN[w]] = 1
+            if gstamp[w] != ep:
+                gstamp[w] = ep
+                ghead[w] = -1
+            gwho[m] = a
+            gnext[m] = ghead[w]
+            ghead[w] = m
+            m += 1
+    for b in range(nN):
+        y = N[b]
+        for t in range(indptr[y], indptr[y + 1]):
+            w = indices[t]
+            if gstamp[w] != ep:
+                continue
+            q = ghead[w]
+            while q != -1:
+                a = gwho[q]
+                if Dm[a, b] > 2:
+                    Dm[a, b] = 2
+                q = gnext[q]
+    return Dm
 
 
 def _bfs_all(g: Graph, s: int, maxd: int) -> Dict[int, int]:
@@ -147,11 +226,15 @@ def certify(graph, edge, measure="lazy", radius: int = 1) -> Certificate:
         scale = Fraction(dmax + 1, dmax)
     if not P:
         return Certificate((i, j), scale, Fraction(0), {}, [], mi, mj, True, scale)
-    Dm = np.empty(len(P) * len(N), np.int64)
-    for a, x in enumerate(P):
-        dx = _bfs_all(g, x, D - 1)
-        for b, y in enumerate(N):
-            Dm[a * len(N) + b] = dx.get(y, D)
+    if r == 1:  # supports in N[i] u N[j]: distances 1, 2, 3 from adjacency and 2-paths (numba)
+        Dm = _pn_distances(g.indptr, g.indices, np.array(P, np.int64), np.array(N, np.int64),
+                           *_scratch(g.num_nodes)).ravel()
+    else:
+        Dm = np.empty(len(P) * len(N), np.int64)
+        for a, x in enumerate(P):
+            dx = _bfs_all(g, x, D - 1)
+            for b, y in enumerate(N):
+                Dm[a * len(N) + b] = dx.get(y, D)
     wP = np.array([net[x] for x in P], np.int64)
     wN = np.array([-net[y] for y in N], np.int64)
     W, nV, nA, cert, u, v, px, py, pf, _, _ = LY._layered_cut(len(P), len(N), Dm, D, wP, wN, True,

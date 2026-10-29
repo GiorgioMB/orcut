@@ -142,3 +142,24 @@ def walk_curvature(graph, steps: int = 2, lazy: bool = True, edges: Optional[np.
         val, diag = LY.layered_ids(g.indptr, g.indices, g.edges, ids, LY.K_WALK_LAZY if lazy else LY.K_WALK,
                                    steps, certify, 8 * numba.get_num_threads())
     return (val, diag) if certify else val
+
+
+def affected_edges(graph, pairs) -> np.ndarray:
+    """Ids of the edges of ``graph`` whose curvature (any measure of :func:`curvature`) can differ
+    from its value before the vertex pairs ``pairs`` were inserted or deleted (``graph`` is the
+    graph after the changes): the edges with an endpoint in the union of the closed
+    neighbourhoods N[a] u N[b] of the changed pairs (a, b). The curvature of (i, j) depends only
+    on the measures of i and j and on the distances within N[i] u N[j], which are 1 on edges, 2 on
+    pairs with a common neighbour, and 3 otherwise; changing (a, b) alters the measures of a and b
+    and the distances of the pairs that contain a or b, so only edges with a or b in N[i] u N[j]
+    can change. Recompute these (``curvature(graph, edges=affected_edges(graph, pairs))``) to
+    update the curvature of all edges exactly after a batch of changes."""
+    g = as_graph(graph)
+    p = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+    mask = np.zeros(g.num_nodes, bool)
+    verts = np.unique(p.ravel())
+    verts = verts[(verts >= 0) & (verts < g.num_nodes)]
+    mask[verts] = True
+    for x in verts:
+        mask[g.indices[g.indptr[x]:g.indptr[x + 1]]] = True
+    return np.flatnonzero(mask[g.edges[:, 0]] | mask[g.edges[:, 1]]).astype(np.int64)

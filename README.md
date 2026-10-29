@@ -21,25 +21,29 @@ c = orcut.certify(g, (0, 1))            # an optimal plan and an optimal 1-Lipsc
 c.verified, c.verify(g)                 # checked exactly when built, and re-checkable from scratch
 orcut.ball_curvature(g, 2)              # Ollivier's ball measures, radius 2 (layered closure)
 orcut.walk_curvature(g, 2)              # two-step lazy random walk
+orcut.affected_edges(g2, changed_pairs) # after inserting/deleting pairs: the only edges to recompute
 ```
 
 ## Installation
 
-orcut is not on PyPI; install it from this repository.
+orcut is not on PyPI; install it from this repository. Without any package index (for example on a
+cluster without PyPI access), use the conda-forge environment:
 
 ```bash
-pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.1.0"
-# or, from a clone:
-pip install -e .            # numpy, scipy, numba
-pip install -e ".[dev]"     # + pytest, hypothesis, networkx
+conda env create -f environment.yml && conda activate orcut   # numpy, scipy, numba, + test/experiment deps
+pip install --no-index --no-deps --no-build-isolation -e .
 pytest -q
 ```
+
+With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.1.0"`, or
+`pip install -e ".[dev]"` from a clone.
 
 ## Versions
 
 * **1.1.0**: `orcut.curvature` (any one-step measure, exact fractions, diagnostics, ablation
-  flags), certificates (`orcut.certify`), and the layered closure for supports of radius r
-  (`ball_curvature`, `walk_curvature`). The kernel of 1.0.0 is kept unchanged in
+  flags), certificates (`orcut.certify`), the layered closure for supports of radius r
+  (`ball_curvature`, `walk_curvature`), exact incremental updates (`affected_edges`), and the
+  experiments of the paper (`experiments/`). The kernel of 1.0.0 is kept unchanged in
   `orcut/_kernels.py`, and `orcut.curvature` returns the same values bit for bit (tested).
 * **1.0.0** is the solver used for every exact curvature in Micaletto and Nigrelli,
   *What Balanced Forman Curvature Certifies About Ollivier–Ricci Curvature*: its compiled kernels
@@ -57,6 +61,6 @@ pytest -q
 | `orcut/measures.py` | measure specifications (`"lazy"`, `"nonlazy"`, `"lly"`, idleness p, `Walk`) |
 | `orcut/certify.py` | per-edge certificates (plan and potential) and their exact verification |
 | `orcut/_reference.py` | independent oracle: full local distance matrix, three-level closure, recursive Dinic |
-| `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `exact` (1.0.0 API), thread control |
+| `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `affected_edges`, `exact` (1.0.0 API), thread control |
 | `tests/` | kernels against each other (bit for bit), against the oracle, and against linear programming |
 | `experiments/` | the experiments of the paper (see `experiments/README.md`) |

@@ -14,8 +14,18 @@
   re-checks them from scratch.
 - `orcut.ball_curvature`, `orcut.walk_curvature`: the layered closure (D = 2r + 1) for measures
   supported on balls of radius r (reference implementation, explicit distances).
+- `orcut.affected_edges(graph, pairs)`: the edges whose curvature can change after inserting or
+  deleting vertex pairs (an endpoint in the union of N[a] u N[b]), for exact incremental updates
+  in rewiring and edge-removal algorithms.
+- Certificates of one-step measures take the P x N distances from adjacency and 2-paths (numba)
+  instead of a BFS per vertex; `Certificate.verify` explores distances only up to the largest
+  potential difference (exactly for the pairs of the plan). An edge whose two measures coincide is
+  reported as certified by the layered closure.
 - Tests: the new kernel against the frozen one (bit for bit, 16 flag combinations) and against
-  linear programming; layered closure against LP; certificates.
+  linear programming; layered closure against LP; certificates; kappa_p = (1 - p) kappa_LLY for
+  p >= 1/(deg_max + 1); locality of `affected_edges` under random insertions and deletions.
+- `experiments/`: the experiments of the paper (E1--E7), with `main.py`, SLURM scripts, and
+  `artifacts.py`, which writes every number, table and figure of the paper.
 
 ## 1.0.0
 
