@@ -54,9 +54,8 @@ With pip and network access: `pip install "orcut @ git+https://github.com/Giorgi
   experiments of the paper (`experiments/`). The kernel of 1.0.0 is kept unchanged in
   `orcut/_kernels.py`, and `orcut.curvature` returns the same values bit for bit (tested).
 * **1.0.0** is the solver used for every exact curvature in Micaletto and Nigrelli,
-  *What Balanced Forman Curvature Certifies About Ollivier–Ricci Curvature*: its compiled kernels
-  (`orcut/_kernels.py`) are those of `curvature_transfer` v11, unchanged, so values and timings
-  reproduce that paper. `curvature-transfer` depends on `orcut==1.0.0` (tag `v1.0.0`).
+  [*What Balanced Forman Curvature Certifies About Ollivier–Ricci Curvature*](https://arxiv.org/abs/2603.13535): 
+ `curvature-transfer` depends on `orcut==1.0.0` (tag `v1.0.0`) to have values and timings reproduce that paper. 
 
 ## Layout
 
