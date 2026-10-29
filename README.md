@@ -1,6 +1,6 @@
-# orcut
+# Transport-free Ollivier-Ricci curvature
 
-Exact Ollivier–Ricci curvature of every edge of an unweighted graph, with one
+Ollivier–Ricci curvature of every edge of an unweighted graph, with one
 minimum cut per edge, in exact integer arithmetic and without a distance matrix.
 
 Any two vertices of the closed neighbourhoods of an edge are at distance at most
