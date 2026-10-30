@@ -37,11 +37,11 @@ pip install --no-index --no-deps --no-build-isolation -e .
 pytest -q
 ```
 
-With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.2.0"`, or
+With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.2.1"`, or
 `pip install -e ".[dev]"` from a clone.
 
 ## Versions
-
+* **1.2.1**: fixed the unpickler for downloaded Planetoid datasets to support loading Python 2 `__builtin__` containers.
 * **1.2.0**: witness relays (one zero-weight relay per common neighbour) for the pairs at distance 2
   that the bitset network would list one by one, chosen per edge when the network gets smaller; a
   bound on the bitset work (four words per adjacency entry) beyond which an edge is solved on the
