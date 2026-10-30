@@ -223,8 +223,9 @@ class _SafeUnpickler(pickle.Unpickler):
     """Unpickler for the Planetoid adjacency files that refuses everything but plain containers
     (a downloaded pickle could otherwise run arbitrary code)."""
 
-    ALLOWED = {("collections", "defaultdict"), ("builtins", "list"), ("builtins", "dict"), ("builtins", "int"),
-               ("builtins", "set")}
+    ALLOWED = {("collections", "defaultdict"), 
+               ("builtins", "list"), ("builtins", "dict"), ("builtins", "int"), ("builtins", "set"),
+               ("__builtin__", "list"), ("__builtin__", "dict"), ("__builtin__", "int"), ("__builtin__", "set")}
 
     def find_class(self, module, name):
         if (module, name) in self.ALLOWED:
