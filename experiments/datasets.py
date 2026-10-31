@@ -532,24 +532,33 @@ def _lcc_with_labels(n: int, e: np.ndarray, lab: np.ndarray) -> Tuple[int, np.nd
     return len(keep), _unique_pairs(e[:, 0], e[:, 1]), lab[keep]
 
 
+def labels_name(spec: str) -> str:
+    """The name :func:`with_labels` gives to ``spec``, without building the graph."""
+    p = spec.split(":")
+    if p[0] == "lfr":
+        return f"LFR({p[1]}, mu={p[2]}, s={p[3]})"
+    if p[0] == "pp":
+        return f"PP({p[1]}, {p[2]}, {p[3]}/{p[4]}, s={p[5]})"
+    if p[0] in ("email-Eu-core", "karate"):
+        return {"email-Eu-core": "email-Eu-core", "karate": "Karate"}[p[0]]
+    raise ValueError(spec)
+
+
 def with_labels(spec: str, data_dir: Optional[str] = None) -> Tuple[str, int, np.ndarray, np.ndarray]:
     """(name, n, edges, labels) for ``lfr:<n>:<mu>:<seed>``, ``pp:<n>:<k>:<d_in>:<d_out>:<seed>``
     (planted partition), ``email-Eu-core`` or ``karate``."""
+    name = labels_name(spec)
     p = spec.split(":")
     if p[0] == "lfr":
         n, e, lab = lfr(int(p[1]), float(p[2]), int(p[3]))
-        return f"LFR({p[1]}, mu={p[2]}, s={p[3]})", n, e, lab
-    if p[0] == "pp":
+    elif p[0] == "pp":
         e, lab = planted_partition(int(p[1]), int(p[2]), float(p[3]), float(p[4]), int(p[5]))
         n, e, lab = _lcc_with_labels(int(p[1]), e, lab)
-        return f"PP({p[1]}, {p[2]}, {p[3]}/{p[4]}, s={p[5]})", n, e, lab
-    if p[0] == "email-Eu-core":
+    elif p[0] == "email-Eu-core":
         n, e, lab = email_eu_core(data_dir)
-        return "email-Eu-core", n, e, lab
-    if p[0] == "karate":
+    else:
         n, e, lab = karate_club()
-        return "Karate", n, e, lab
-    raise ValueError(spec)
+    return name, n, e, lab
 
 
 # ---------------------------------------------------------------------- LFR

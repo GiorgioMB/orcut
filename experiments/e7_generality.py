@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from fractions import Fraction
 
@@ -32,13 +33,16 @@ import registry as R
 
 # ---------------------------------------------------------------- part A
 
+MEASURE_LABELS = ["lazy", "nonlazy", "lly", "idle 1/4", "idle 1/2", "idle 3/4", "weighted walk"]
+
+
 def measure_specs(g, seed=0):
     import orcut
 
     rng = np.random.default_rng(seed)
-    return [("lazy", "lazy"), ("nonlazy", "nonlazy"), ("lly", "lly"), ("idle 1/4", Fraction(1, 4)),
-            ("idle 1/2", Fraction(1, 2)), ("idle 3/4", Fraction(3, 4)),
-            ("weighted walk", orcut.Walk(weights=rng.integers(1, 11, g.num_edges), idleness="lazy"))]
+    specs = ["lazy", "nonlazy", "lly", Fraction(1, 4), Fraction(1, 2), Fraction(3, 4),
+             orcut.Walk(weights=rng.integers(1, 11, g.num_edges), idleness="lazy")]
+    return list(zip(MEASURE_LABELS, specs))
 
 
 def part_measures(a):
@@ -52,8 +56,12 @@ def part_measures(a):
     if a.quick:
         graphs = ["bundled:jazz", "synth:CL2.1:5000:8:0"]
     for spec in graphs:
+        if all(rows.done(graph=R.display(spec), measure=label) for label in MEASURE_LABELS):
+            continue
         name, g, meta = R.load(spec, a.data_dir)
-        t_lazy = None
+        # the other measures are timed relative to the lazy one, also when it was timed before a restart
+        t_lazy = common.num(rows.get(graph=name, measure="lazy"), "time_s") if rows.done(graph=name, measure="lazy") \
+            else None
         for label, m in measure_specs(g):
             if rows.done(graph=name, measure=label):
                 continue
@@ -179,6 +187,8 @@ def part_radius(a):
         graphs = ["bundled:yeast", "bundled:jazz"]
     configs = [("ball", 2), ("ball", 3), ("walk", 2), ("walk", 3)]
     for spec in graphs:
+        if all(rows.done(graph=R.display(spec), config=f"{kind} r={r}") for kind, r in configs):
+            continue
         name, g, meta = R.load(spec, a.data_dir)
         strata = common.stratified_bins(g, a.per_bin, seed=2)
         ids_sample = np.concatenate([s_ for _, s_, _ in strata])
@@ -269,3 +279,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())

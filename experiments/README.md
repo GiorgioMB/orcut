@@ -50,12 +50,30 @@ bash experiments/slurm/quick.sh 4                              # whole pipeline 
 sbatch experiments/slurm/run_all.sbatch                        # everything on one 32-core node
 sbatch experiments/slurm/array.sbatch                          # or one step per node, then:
 python experiments/main.py --steps artifacts --paper-dir ../paper/generated
+python experiments/main.py --status                            # what is done, failed or running
 ```
 
-Every step checkpoints after each result row and skips rows already present, so a job killed by
-the scheduler is resubmitted unchanged. `results/status.json` records the exit code and duration
-of every step and `results/environment.json` the machine and library versions; logs are in
-`results/logs/`.
+**Checkpoints.** A job stopped by the scheduler (time limit, memory limit) or by a crash is
+resubmitted unchanged, and only what is left is computed.
+
+* *Steps.* A step that ends without errors is recorded in `results/status/<step>.json` and is not
+  run again (`--force` runs it anyway, e.g. `--steps e2-real --force`). A step that failed, was
+  killed, or left rows that ended in an error runs again. `artifacts` runs again when the result
+  tables changed since its last run; E5 (whole) and E6 (BORF), when completed without
+  GraphRicciCurvature, run again once it is available (`--grc-python`, `ORCUT_GRC_PYTHON`).
+* *Rows.* Every step saves each result row as soon as it is computed and skips the rows already in
+  its tables; a graph whose rows are all there is not even loaded. Rows that hold no result
+  (status `error: ...` or `unavailable`) are computed again, and a step that ends with error rows
+  exits with code 3 and is not recorded as done. A resumed step draws the same samples as an
+  uninterrupted one and remembers which methods ran out of budget.
+* *One run per step.* While a step runs, `results/status/<step>.lock` keeps other jobs from running
+  it at the same time (e.g. `run_all.sbatch` resubmitted while an array task is still on that
+  step); the lock of a killed job goes stale after 10 minutes.
+
+`--force` does not recompute rows: to recompute a table, delete it or some of its rows. The
+results of a `--quick` run and of a full run cannot share a directory. `results/status.json`
+gathers the records of all steps and `results/environment.json` the machine and library versions;
+logs are in `results/logs/`.
 
 Relative paths given to `main.py` (`--out`, `--data-dir`, `--paper-dir`, `--grc-python`) are
 relative to the directory it is started from; the steps get them as absolute paths. The SLURM

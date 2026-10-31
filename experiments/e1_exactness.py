@@ -13,6 +13,7 @@ Usage: python e1_exactness.py [--graphs SPEC ...] [--out results] [--quick]
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from fractions import Fraction
 from math import gcd
@@ -82,13 +83,21 @@ def run_graph(spec, rows, a):
     import orcut
     from orcut import _core as C, _layered as LY, _reference as RF
 
+    todo = [m for m in MEASURES if not rows.done(graph=R.display(spec), measure=m)]
+    if not todo:  # every measure of this graph is in the table: nothing to load or compute
+        return
     name, g, meta = R.load(spec, a.data_dir)
     ids = np.arange(g.num_edges, dtype=np.int64)
     rng = np.random.default_rng(0)
-    frozen = orcut.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
-    ref = RF.exact_ids_reference(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
+    frozen = ref = None  # all edges with the frozen kernel and the oracle: only if a measure they cover is left
+    if {"lazy", "nonlazy", "lly"} & set(todo):
+        frozen = orcut.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
+        ref = RF.exact_ids_reference(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
     for measure in MEASURES:
-        if rows.done(graph=name, measure=measure):
+        cap = a.ortools_cap if measure != "walk" else a.walk_cap
+        if measure not in todo:
+            if len(ids) > cap:  # draw its sample anyway: a resumed run checks the same edges as an uninterrupted one
+                rng.choice(ids, cap, replace=False)
             continue
         spec_m = _spec(measure, g)
         t0 = time.perf_counter()
@@ -107,7 +116,6 @@ def run_graph(spec, rows, a):
             lv, _ = LY.layered_ids(g.indptr, g.indices, g.edges, ids, kind, 1, False, 8)
             row["layered_mismatch"] = int(np.sum(lv != val))
         # OR-Tools, exact fractions (all edges, or a sample for the walk and for large graphs)
-        cap = a.ortools_cap if measure != "walk" else a.walk_cap
         sub = ids if len(ids) <= cap else np.sort(rng.choice(ids, cap, replace=False))
         lp = B.LocalProblems(g, _lp_kind(measure)) if measure != "walk" else None
         bad = 0
@@ -173,3 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())

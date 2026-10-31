@@ -12,6 +12,19 @@
   wherever `sbatch` is called from (`ORCUT_ROOT` overrides), and downloads and the data cache are
   written under process-unique temporary names (steps of a job array may fetch the same graph at
   once).
+- Experiments, checkpoints: `main.py` records every step in `<out>/status/<step>.json` and does not
+  run again a step that ended without errors (`--force` runs it anyway, `--status` shows every
+  step); a step that failed, was killed or was interrupted runs again and resumes. The
+  `status.json` of earlier runs is read. Rows that hold no result (an error, or GraphRicciCurvature
+  unavailable) no longer count as done, and a step that ends with error rows exits with code 3.
+  `artifacts` runs again only when the result tables changed, and E5 (whole) and E6 (BORF) once GRC
+  becomes available. A lock per running step keeps two jobs from running it at once (both would
+  rewrite its tables); SIGTERM (time limit, `scancel`) is recorded as an interruption. A resumed
+  step no longer redoes finished work before skipping it (E1 recomputed the oracle on all edges, E3
+  part threads a warm-up solve, E5 the exact values, E6 regenerated every LFR graph), and computes
+  what an uninterrupted run would: the same samples (E1, E2 part B), the methods that ran out of
+  budget stay off (E2 parts A and C), values checked against the full configuration (E4), times
+  relative to the lazy measure (E7; they were NaN after a restart).
 
 ## 1.2.0
 

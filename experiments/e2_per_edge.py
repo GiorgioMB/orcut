@@ -36,6 +36,7 @@ Usage: python e2_per_edge.py --part A|B|C [--out results] [--quick]
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -83,6 +84,11 @@ def part_a(a):
     methods = ["ours", "nowitness", "witness", "graphflow", "oracle", "pot", "emd2", "ortools", "highs"]
     from orcut import _witness as WT
     dead = {}  # (sweep, regime, method) -> size at which it exceeded the budget
+    for r in rows.rows:  # a resumed run keeps off the methods that exceeded it before the restart
+        for meth in methods:
+            if common.num(r, f"{meth}_s") > a.budget:
+                key, s_r = (r.get("sweep"), r.get("regime"), meth), int(common.num(r, "s"))
+                dead[key] = min(dead.get(key, s_r), s_r)
     for sweep, ua, ub, t in sweeps:
         s = ub if sweep == "hub" else ua
         for regime in D.REGIMES:
@@ -173,10 +179,11 @@ def part_b(a):
         dsum = g.deg[g.edges[:, 0]] + g.deg[g.edges[:, 1]]
         bins = np.floor(np.log2(dsum)).astype(int)
         for bn in np.unique(bins):
+            all_ids = np.flatnonzero(bins == bn)
+            # drawn also for the bins already done, so that a resumed run times the same edges
+            ids = np.sort(rng.choice(all_ids, min(len(all_ids), a.per_bin), replace=False)).astype(np.int64)
             if rows.done(graph=name, bin=int(bn)):
                 continue
-            all_ids = np.flatnonzero(bins == bn)
-            ids = np.sort(rng.choice(all_ids, min(len(all_ids), a.per_bin), replace=False)).astype(np.int64)
             row = dict(graph=name, bin=int(bn), lo=2 ** int(bn), hi=2 ** (int(bn) + 1), share=len(all_ids) / g.num_edges,
                        edges_in_bin=len(all_ids), timed=len(ids), m=g.num_edges, deg_max=meta["deg_max"])
             t_ours, v = common.best_of(lambda: orcut.curvature(g, "lazy", edges=ids, n_jobs=1), reps=3)
@@ -204,7 +211,13 @@ def part_c(a):
 
     rows = Rows(f"{out_dir(a.out, 'e2')}/dasgupta.csv", ["kind", "n", "seed"])
     sizes = [2 ** k for k in range(8, 21, 2)] if not a.quick else [2 ** 8, 2 ** 10, 2 ** 12]
-    dead = {}
+    methods = ["ours", "witness", "graphflow", "pot"]
+    dead = {}  # (kind, method) -> size at which it exceeded the budget (also before a restart)
+    for r in rows.rows:
+        for meth in methods:
+            if common.num(r, f"{meth}_s") > a.budget:
+                key, n_r = (r.get("kind"), meth), int(common.num(r, "n"))
+                dead[key] = min(dead.get(key, n_r), n_r)
     for kind in D.DASGUPTA_KINDS:
         for n_ in sizes:
             for seed in range(1 if a.quick else 2):
@@ -218,7 +231,6 @@ def part_c(a):
                 row = dict(kind=kind, n=n_, seed=seed, m=g.num_edges, path=int(d[0, C.D_PATH]), nodes=int(d[0, C.D_NODES]),
                            arcs=int(d[0, C.D_ARCS]), value=ref,
                            local_input=int(g.deg[g.neighbors(0)].sum() + g.deg[g.neighbors(1)].sum()))
-                methods = ["ours", "witness", "graphflow", "pot"]
                 pot_ok = (n_ + 2) ** 2 <= a.max_pairs
                 if pot_ok:
                     lp = B.LocalProblems(g, "lazy")
@@ -277,3 +289,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())

@@ -26,6 +26,7 @@ Usage: python e4_ablation.py [--graphs SPEC ...] [--per-bin 100] [--out results]
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -63,10 +64,12 @@ def main():
 
     rows = Rows(f"{out_dir(a.out, 'e4')}/ablation.csv", ["graph", "config"])
     for spec in a.graphs:
+        if all(rows.done(graph=R.display(spec), config=cfg) for cfg in ORDER):
+            continue
         name, g, meta = R.load(spec, a.data_dir)
         strata = stratified_bins(g, a.per_bin)
         ids = np.concatenate([s for _, s, _ in strata])
-        base = None
+        base = None  # values of the full configuration on the sample, which every other one must match
         for cfg in ORDER:
             if rows.done(graph=name, config=cfg):
                 continue
@@ -79,8 +82,9 @@ def main():
                 v, num, d = f(ids)
                 row.update(mean_nodes=float(np.mean(d[:, C.D_NODES])), mean_arcs=float(np.mean(d[:, C.D_ARCS])),
                            max_arcs=int(np.max(d[:, C.D_ARCS])), mean_groups=float(np.mean(d[:, C.D_GROUPS])))
-                if base is None:
-                    base = v
+                if base is None:  # "full" comes first, unless a resumed run has it already
+                    base = v if cfg == "full" else C.core_ids(g.indptr, g.indices, g.edges, ids, C.M_LAZY,
+                                                              flags=CONFIGS["full"], nchunks=1)[0]
                 row["value_mismatch"] = int(np.sum(v != base))
             elif cfg == "witness":
                 from orcut import _witness as WT
@@ -90,7 +94,9 @@ def main():
                 v, num, d = f(ids)
                 row.update(mean_nodes=float(np.mean(d[:, WT.WD_NODES])), mean_arcs=float(np.mean(d[:, WT.WD_ARCS])),
                            max_arcs=int(np.max(d[:, WT.WD_ARCS])), mean_groups=float(np.mean(d[:, WT.WD_GROUPS])))
-                row["value_mismatch"] = int(np.sum(v != base)) if base is not None else 0
+                if base is None:
+                    base = C.core_ids(g.indptr, g.indices, g.edges, ids, C.M_LAZY, flags=CONFIGS["full"], nchunks=1)[0]
+                row["value_mismatch"] = int(np.sum(v != base))
             elif cfg == "graphflow":
                 times = []
                 for _, s, _ in strata:
@@ -122,3 +128,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())

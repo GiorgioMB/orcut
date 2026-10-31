@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from fractions import Fraction
 
@@ -124,7 +125,14 @@ def part_borf(a):
                                    "real:Coauthor-Physics", "real:GitHub"])
     if a.quick:
         graphs = ["bundled:jazz", "bundled:yeast", "synth:CL2.1:3000:8:0"]
+    grc_ok = B.grc_python(a.grc_python) is not None
     for spec in graphs:
+        name = R.display(spec)
+        r = rows.get(graph=name, backend="grc")
+        # without GRC, a row that already says "unavailable" stays as it is
+        grc_left = not rows.done(graph=name, backend="grc") and (grc_ok or r is None or common.row_failed(r))
+        if not grc_left and all(rows.done(graph=name, backend=b) for b in ("orcut-full", "orcut-incremental")):
+            continue
         name, g, meta = R.load(spec, a.data_dir)
         base = dict(graph=name, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"], loops=a.loops, add=a.add,
                     remove=a.remove, threads=a.threads, cite=meta.get("cite", ""))
@@ -152,8 +160,11 @@ def part_borf(a):
         if len(finals) == 2:
             same = np.array_equal(finals["orcut-full"].edges, finals["orcut-incremental"].edges)
             rows.add(dict(rows.rows[-1], same_final_graph=bool(same)))
-        if not rows.done(graph=name, backend="grc"):
-            val, t, status = B.grc(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python, a.grc_timeout)
+        if grc_left:
+            if grc_ok:
+                val, t, status = B.grc(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python, a.grc_timeout)
+            else:
+                val, t, status = None, float("nan"), "unavailable"
             row = dict(base, backend="grc", status=status, curv_per_iter_s=t)
             if val is not None:
                 import orcut
@@ -224,17 +235,22 @@ def part_community(a):
                          + ["email-Eu-core", "karate"])
     if a.quick:
         specs = ["karate", "lfr:500:0.1:0", "lfr:500:0.3:0", "pp:600:6:12:2:0"]
+    methods = ["exact", "bf", "af3", "jl"]
     for spec in specs:
+        if all(rows.done(graph=D.labels_name(spec), method=m) for m in methods + ["louvain"]):
+            continue  # not even generated (LFR graphs take a while)
         name, n, e, lab = D.with_labels(spec, a.data_dir)
         g = D.to_graph(n, e)
         base = dict(graph=name, spec=spec, n=g.num_nodes, m=g.num_edges, deg_max=int(g.deg.max()),
                     communities_true=int(len(np.unique(lab))))
-        t0 = time.perf_counter()
-        orcut.curvature(g, HALF, n_jobs=1)
-        t_full = time.perf_counter() - t0
-        for method in ["exact", "bf", "af3", "jl"]:
+        t_full = None  # one full computation, for the estimate of the exact method's row
+        for method in methods:
             if rows.done(graph=name, method=method):
                 continue
+            if method == "exact":
+                t0 = time.perf_counter()
+                orcut.curvature(g, HALF, n_jobs=1)
+                t_full = time.perf_counter() - t0
             order, evals, secs, mism = sia(g, method, max_frac=a.max_frac, check_every=a.check_every, budget=a.budget)
             T = len(order)
             full_equiv = int((T + 1) * g.num_edges - T * (T + 1) // 2)  # all alive edges after every deletion
@@ -294,3 +310,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())

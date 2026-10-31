@@ -24,6 +24,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import xio  # noqa: E402
+from checkpoint import EXIT_INCOMPLETE  # noqa: E402,F401  (re-exported: the exit code of finish)
 
 RESULTS = os.path.join(ROOT, "results")
 
@@ -73,25 +74,60 @@ def num(row: Dict, key: str, default=float("nan")) -> float:
         return default
 
 
+def row_failed(row: Dict) -> bool:
+    """A row that records a failure (status "error: ...", e.g. GraphRicciCurvature crashed)."""
+    return str(row.get("status") or "").startswith("error")
+
+
+def row_ok(row: Dict) -> bool:
+    """A row that holds a result: not a failure, and not "unavailable" (GraphRicciCurvature not
+    installed). Rows that are not ok are computed again when their step runs again."""
+    return not (row_failed(row) or str(row.get("status") or "") == "unavailable")
+
+
+_TABLES: List["Rows"] = []  # every result table opened by this process (finish)
+
+
 class Rows:
     """Rows of a result table, checkpointed after every row (a killed job resumes at the next row).
-    Each row is keyed by ``key``; rows already present are skipped by :meth:`done`."""
+    Each row is keyed by ``key``; rows already present are skipped by :meth:`done`, except rows
+    that hold no result (:func:`row_ok`), which are computed again and replaced by :meth:`add`."""
 
     def __init__(self, path: str, key: Sequence[str]):
         self.path = path
         self.key = tuple(key)
         self.rows = read_csv(path)
+        _TABLES.append(self)
 
     def _k(self, r) -> tuple:
         return tuple(str(r.get(k)) for k in self.key)
 
-    def done(self, **kv) -> bool:
+    def get(self, **kv) -> Optional[Dict]:
+        """The row with this key, whatever its status, or None."""
         want = tuple(str(kv.get(k)) for k in self.key)
-        return any(self._k(r) == want for r in self.rows)
+        return next((r for r in self.rows if self._k(r) == want), None)
+
+    def done(self, **kv) -> bool:
+        r = self.get(**kv)
+        return r is not None and row_ok(r)
 
     def add(self, row: Dict) -> None:
         self.rows = [r for r in self.rows if self._k(r) != self._k(row)] + [row]
         write_csv(self.rows, self.path)
+
+
+def finish() -> int:
+    """Exit code of an experiment script (``sys.exit(common.finish())`` at the end of it): 0, or
+    EXIT_INCOMPLETE when rows of its tables record a failure. main.py then does not record the
+    step as done, and when the step runs again it computes these rows again (and only these)."""
+    bad = [(t, r) for t in _TABLES for r in t.rows if row_failed(r)]
+    if not bad:
+        return 0
+    log(f"{len(bad)} row(s) ended in an error; they are computed again when this step runs again:")
+    for t, r in bad[:20]:
+        key = ", ".join(f"{k}={r.get(k)}" for k in t.key)
+        log(f"  {os.path.basename(t.path)} [{key}]: {str(r.get('status'))[:200]}")
+    return EXIT_INCOMPLETE
 
 
 # ------------------------------------------------------------------- timing

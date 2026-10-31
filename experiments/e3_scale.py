@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import threading
 import time
 
@@ -175,6 +176,8 @@ def part_threads(a):
     if ts[-1] != tmax:
         ts.append(tmax)
     for spec in graphs:
+        if all(rows.done(graph=R.display(spec), threads=T) for T in ts):
+            continue  # no need to load it or warm up (minutes on the largest graph)
         name, g, meta = R.load(spec, a.data_dir)
         solve_all(g, "lazy", tmax)
         for T in ts:
@@ -242,3 +245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.exit(common.finish())
