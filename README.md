@@ -28,17 +28,12 @@ orcut.affected_edges(g2, changed_pairs) # after inserting/deleting pairs: the on
 
 ## Installation
 
-orcut is not on PyPI; install it from this repository. Without any package index (for example on a
-cluster without PyPI access), use the conda-forge environment:
-
+`orcut` is on PyPI as [`faster-or-curvature`](https://pypi.org/project/faster-or-curvature/), but that package is the solver alone; for the experiments and everything else beyond the solver, install from this repository. Without any package index (for example on a cluster without PyPI access), use the conda-forge environment:
 ```bash
 conda env create -f environment.yml && conda activate orcut   # numpy, scipy, numba, + test/experiment deps
 pip install --no-index --no-deps --no-build-isolation -e .
 pytest -q
 ```
-
-With pip and network access: `pip install "orcut @ git+https://github.com/GiorgioMB/orcut.git@v1.2.1"`, or
-`pip install -e ".[dev]"` from a clone.
 
 ## Versions
 * **1.2.1**: fixed the unpickler for downloaded Planetoid datasets to support loading Python 2 `__builtin__` containers.
@@ -54,7 +49,7 @@ With pip and network access: `pip install "orcut @ git+https://github.com/Giorgi
   experiments of the paper (`experiments/`). The kernel of 1.0.0 is kept unchanged in
   `orcut/_kernels.py`, and `orcut.curvature` returns the same values bit for bit (tested).
 * **1.0.0** is the solver used for every exact curvature in Micaletto and Nigrelli,
-  [*What Balanced Forman Curvature Certifies About Ollivier–Ricci Curvature*](https://arxiv.org/abs/2603.13535): 
+  [*From Proxy to Certificate: Two-Sided Ollivier--Ricci Bounds from Balanced Forman Curvature*](https://arxiv.org/abs/2603.13535): 
  `curvature-transfer` depends on `orcut==1.0.0` (tag `v1.0.0`) to have values and timings reproduce that paper. 
 
 ## Layout
