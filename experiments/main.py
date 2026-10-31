@@ -12,12 +12,17 @@ on a laptop) to check the pipeline; its numbers are not the paper's.
 
 Steps can also run in parallel on several nodes (``slurm/array.sbatch``); ``artifacts`` reads
 whatever results exist.
+
+Relative paths (``--out``, ``--data-dir``, ``--paper-dir``, ``--grc-python``) are relative to the
+directory main.py is started from; every step gets them as absolute paths and runs from that same
+directory.
 """
 from __future__ import annotations
 
 import argparse
-import json
+import glob
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -46,6 +51,48 @@ THREADED = {"e3-real", "e3-threads", "e3-synth", "e5-whole", "e6-borf", "e7-meas
 GRC = {"e5-whole", "e6-borf"}
 
 
+def _abspath(p):
+    return os.path.abspath(os.path.expanduser(p)) if p else p
+
+
+def _grc_python(explicit):
+    """The interpreter of the GRC environment (``--grc-python``, else $ORCUT_GRC_PYTHON) as an
+    absolute path, or None. A bare command name is looked up on PATH."""
+    p = explicit or os.environ.get("ORCUT_GRC_PYTHON") or None
+    if not p:
+        return None
+    if os.sep in p or p.startswith("~"):
+        return _abspath(p)
+    return shutil.which(p) or p
+
+
+def _old_layout(out, data_dir):
+    """What main.py up to v1.2.0 left in the wrong place. It ran every step from experiments/ and
+    passed the relative --out and --data-dir of the SLURM scripts unchanged, so the steps wrote
+    their tables to experiments/<out> (logs and status.json stayed in <out>) and their downloads
+    to experiments/<data-dir>, both relative to the repository root. Returns (fatal, messages):
+    misplaced tables are fatal, because the steps would not see them and would compute them again
+    (and artifacts would not find them); misplaced downloads would only be downloaded again."""
+    root = os.path.dirname(HERE)
+
+    def old_place(p):
+        rel = os.path.relpath(p, root)
+        return None if rel == os.curdir or rel.startswith(os.pardir) else os.path.join(HERE, rel)
+
+    fatal, msgs = False, []
+    old = old_place(out)
+    if old and glob.glob(os.path.join(old, "e[1-7]", "*.csv")):
+        fatal = True
+        msgs.append(f"result tables of an earlier run are in {old}, not in {out}; move them there first:\n"
+                    f"    for d in {old}/e[1-7]; do mkdir -p {out}/${{d##*/}} && mv -n $d/* {out}/${{d##*/}}/; done")
+    data = data_dir or os.path.join(HERE, "data", "real")
+    old = old_place(data)
+    if old and glob.glob(os.path.join(old, "*")):
+        msgs.append(f"downloads of an earlier run are in {old}, not in {data}; to use them instead of downloading "
+                    f"again:\n    mkdir -p {data} && mv -n {old}/* {data}/")
+    return fatal, msgs
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--steps", nargs="+", default=None, help=f"subset of: {' '.join(STEPS)} artifacts")
@@ -56,6 +103,8 @@ def main():
     ap.add_argument("--paper-dir", default=None, help="where artifacts writes the numbers/tables/figures")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--ignore-old-layout", action="store_true",
+                    help="run even if result tables of an earlier run are where main.py up to v1.2.0 put them")
     a = ap.parse_args()
     if a.list:
         for k, (cmd, desc) in STEPS.items():
@@ -66,6 +115,15 @@ def main():
     bad = [s for s in steps if s not in STEPS and s != "artifacts"]
     if bad:
         ap.error(f"unknown steps: {bad}")
+    # every step gets absolute paths (resolved against the directory main.py was started from)
+    a.out, a.data_dir, a.paper_dir = _abspath(a.out), _abspath(a.data_dir), _abspath(a.paper_dir)
+    a.grc_python = _grc_python(a.grc_python)
+    fatal, msgs = _old_layout(a.out, a.data_dir)
+    for m in msgs:
+        common.log(m)
+    if fatal and not a.ignore_old_layout:
+        common.log("stopping (--ignore-old-layout runs anyway)")
+        sys.exit(2)
     os.makedirs(os.path.join(a.out, "logs"), exist_ok=True)
     env_path = os.path.join(a.out, "environment.json")
     status_path = os.path.join(a.out, "status.json")
@@ -98,7 +156,7 @@ def main():
         with open(log_path, "a") as fh:
             fh.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(cmd)}\n")
             fh.flush()
-            rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=HERE)
+            rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT)
         status[step] = {"returncode": rc, "seconds": round(time.time() - t0, 1), "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "quick": a.quick}
         common.xio.atomic_json(status, status_path)

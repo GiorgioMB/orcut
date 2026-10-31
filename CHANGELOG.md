@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Experiments, paths: `main.py` gives every step absolute paths and runs it from the directory it
+  was started from. It used to run the steps from `experiments/` and pass the relative `--out` and
+  `--data-dir` of the SLURM scripts unchanged, so the result tables went to `experiments/results/`
+  while the logs and `status.json` went to `results/`, the downloads went to
+  `experiments/experiments/data/real/` instead of the cache filled on the login node, and
+  `artifacts` did not find `environment.json`. Tables left in the old place by such a run stop
+  `main.py` until they are moved (it prints the command). The SLURM scripts find the repository
+  wherever `sbatch` is called from (`ORCUT_ROOT` overrides), and downloads and the data cache are
+  written under process-unique temporary names (steps of a job array may fetch the same graph at
+  once).
+
 ## 1.2.0
 
 - Witness relays (`F_WITNESS`, on by default: `F_ALL = 31`). A pair of P x N at distance 2 has a

@@ -29,6 +29,7 @@ import numpy as np
 from numba import njit
 
 from common import HERE, log
+import xio
 
 DATA = os.path.join(HERE, "data")
 SNAP = "https://snap.stanford.edu/data/"
@@ -159,7 +160,7 @@ REAL_BY_NAME = {s.name: s for s in REAL}
 
 
 def _download(url: str, path: str, retries: int = 4) -> None:
-    tmp = path + ".part"
+    tmp = xio.tmp_path(path)  # process-unique: steps of a job array may download the same file at once
     last = None
     for attempt in range(retries):
         try:
@@ -252,8 +253,10 @@ def real(name: str, data_dir: Optional[str] = None) -> Tuple[int, np.ndarray, Di
     if len(e0) < spec.min_edges:
         raise RuntimeError(f"{name}: parsed {len(e0)} edges, expected at least {spec.min_edges}; delete {src}")
     n, e = largest_component(n0, e0)
-    np.savez_compressed(cache + ".tmp.npz", n=n, edges=e, raw_nodes=n0, raw_edges=len(e0))
-    os.replace(cache + ".tmp.npz", cache)
+    tmp = xio.tmp_path(cache)  # process-unique, as in _download
+    with open(tmp, "wb") as fh:  # a file object: numpy must not append ".npz" to the name
+        np.savez_compressed(fh, n=n, edges=e, raw_nodes=n0, raw_edges=len(e0))
+    os.replace(tmp, cache)
     return n, e, {"raw_nodes": n0, "raw_edges": int(len(e0))}
 
 

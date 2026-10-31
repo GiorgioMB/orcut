@@ -57,6 +57,12 @@ the scheduler is resubmitted unchanged. `results/status.json` records the exit c
 of every step and `results/environment.json` the machine and library versions; logs are in
 `results/logs/`.
 
+Relative paths given to `main.py` (`--out`, `--data-dir`, `--paper-dir`, `--grc-python`) are
+relative to the directory it is started from; the steps get them as absolute paths. The SLURM
+scripts run from the repository root, which they find wherever `sbatch` is called from (or set
+`ORCUT_ROOT`), and default to `ORCUT_RESULTS=<root>/results` and
+`ORCUT_DATA=<root>/experiments/data/real`.
+
 ## Protocol
 
 **Timing.** All kernels are compiled before timing (`common.warm_jit`). Per-edge times are the
