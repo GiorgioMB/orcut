@@ -48,6 +48,61 @@ import datasets as D
 import registry as R
 
 
+# bytes per entry of the dense local problem (|supp m_i| x |supp m_j|) that a method holds, measured
+# loosely and rounded up; the oracle holds |S|^2 distances instead. Only to skip what cannot fit.
+DENSE_BYTES = {"build": 24, "pot": 64, "emd2": 64, "ortools": 120, "highs": 250}
+
+
+def _need(meth, n1, n2, S):
+    if meth == "oracle":
+        return 16.0 * S * S
+    if meth in DENSE_BYTES:
+        return float(DENSE_BYTES[meth] + DENSE_BYTES["build"]) * n1 * n2
+    return 0.0
+
+
+def _method(parts, pk, meth, f, need, ref, repeat_below):
+    """Columns of ``meth`` for the row ``pk``: its saved result if it ran before, else what it gave
+    up with, else skipped if it cannot fit in the job's memory, else timed now (once if a call takes
+    longer than ``repeat_below`` seconds, else repeated) and saved at once."""
+    import partial as PT
+
+    st, res = parts.resume(pk, meth)
+    if st == "done":
+        return dict(res)
+    if st == "gave_up":
+        return {f"{meth}_s": float("nan"), **{f"{meth}_{k}": v for k, v in res.items()}}
+    avail = PT.memory_available()
+    if need and avail is not None and need > avail:
+        return {f"{meth}_s": float("nan"), f"{meth}_need_bytes": need,
+                f"{meth}_status": f"skipped: needs ~{need / 2**30:.1f} GB, the job has {(PT.memory_limit() or 0) / 2**30:.0f} GB"}
+    parts.begin(pk, meth)
+    t0 = time.perf_counter()
+    v0 = f()
+    once = time.perf_counter() - t0
+    if once > repeat_below:
+        tm, val = once, v0
+    else:
+        tm, val = _time_repeated(f, min_total=min(0.5, 10 * once + 0.05), max_reps=1000, warm=False)
+    res = {f"{meth}_s": tm, f"{meth}_err": abs(float(val) - ref)}
+    parts.finish(pk, meth, res)
+    return res
+
+
+def _row_left(rows, methods, **key):
+    """None if the row is done; else the methods to compute: all if the row is not in the table,
+    else those that an earlier job gave up and this one can run (partial.retry_now)."""
+    import partial as PT
+
+    old = rows.get(**key)
+    if old is None or not rows.done(**key):
+        return list(methods), None
+    # a method with no time and no reason was skipped by the budgets of earlier versions: run it now
+    left = [m for m in methods if PT.retry_now(old, m) or
+            (common.num(old, f"{m}_s") != common.num(old, f"{m}_s") and not old.get(f"{m}_status"))]
+    return (left, old) if left else (None, old)
+
+
 def _time_repeated(f, min_total=0.2, max_reps=2000, warm=True):
     """Median-free robust per-call time: run f repeatedly until min_total seconds, take the fastest
     of 3 such batches divided by the batch length."""
@@ -83,20 +138,20 @@ def part_a(a):
     seeds = range(a.seeds)
     methods = ["ours", "nowitness", "witness", "graphflow", "oracle", "pot", "emd2", "ortools", "highs"]
     from orcut import _witness as WT
-    dead = {}  # (sweep, regime, method) -> size at which it exceeded the budget
-    for r in rows.rows:  # a resumed run keeps off the methods that exceeded it before the restart
-        for meth in methods:
-            if common.num(r, f"{meth}_s") > a.budget:
-                key, s_r = (r.get("sweep"), r.get("regime"), meth), int(common.num(r, "s"))
-                dead[key] = min(dead.get(key, s_r), s_r)
+    import partial as PT
+
+    parts = PT.Parts(f"{out_dir(a.out, 'e2', 'partial')}/controlled.json")
+    dense = ("oracle", "pot", "emd2", "ortools", "highs")
     for sweep, ua, ub, t in sweeps:
         s = ub if sweep == "hub" else ua
         for regime in D.REGIMES:
             if regime == "dense" and s > 4096:  # 20% of |U_i| x |U_j| as cross edges: too many to generate
                 continue
             for seed in seeds:
-                if rows.done(sweep=sweep, regime=regime, s=s, seed=seed):
+                left, old = _row_left(rows, methods, sweep=sweep, regime=regime, s=s, seed=seed)
+                if left is None:
                     continue
+                pk = (sweep, regime, s, seed)
                 n, e = D.edge_instance(ua, ub, t, regime, seed)
                 g = D.to_graph(n, e)
                 eid = np.array([g.edge_id(0, 1)], np.int64)
@@ -112,25 +167,23 @@ def part_a(a):
                            witness_nodes=int(wd[WT.WD_NODES]), witness_arcs=int(wd[WT.WD_ARCS]),
                            local_input=int(sum(int(g.deg[x]) for x in set(map(int, g.neighbors(0))) |
                                                set(map(int, g.neighbors(1))))))
+                row["dist_matrix_bytes"] = int((ua + ub + t + 2) ** 2)
+                if old is not None:  # a row given up in part: keep what it has, compute what is left
+                    row.update({k: v for k, v in old.items() if k not in row and not any(
+                        k.startswith(m + "_") for m in left)})
                 gp = B.GraphFlowProblems(g, "lazy")
-                big = ua + ub + t + 2 > 20000  # the explicit distance matrix would need > 400 MB
-                if not big:
+                n1, n2 = int(g.deg[0]) + 1, int(g.deg[1]) + 1
+                lp = prob = None
+                avail = PT.memory_available()
+                if any(m in left and m != "oracle" and m in dense and (avail is None or _need(m, n1, n2, 0) <= avail)
+                       for m in dense):
                     lp = B.LocalProblems(g, "lazy")
                     tb, prob = _time_repeated(lambda: lp.build(int(eid[0]), True), min_total=0.1, max_reps=200)
                     pa, pb, M, L, aint, bint = prob
                     row["build_s"] = tb
                     row["pot_input_bytes"] = int(M.size * 8)
-                row["dist_matrix_bytes"] = int((ua + ub + t + 2) ** 2)
                 for meth in methods:
-                    key = (sweep, regime, meth)
-                    if key in dead and s > dead[key]:
-                        row[f"{meth}_s"] = float("nan")
-                        continue
-                    if meth == "highs" and s > 256:
-                        row[f"{meth}_s"] = float("nan")
-                        continue
-                    if big and meth not in ("ours", "nowitness", "witness", "graphflow"):
-                        row[f"{meth}_s"] = float("nan")
+                    if meth not in left:
                         continue
                     if meth == "ours":  # the kernel driver directly (no Python wrapper), like the C++ calls below
                         f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
@@ -143,6 +196,8 @@ def part_a(a):
                         f = lambda: gp.curvature(int(eid[0]))[0]
                     elif meth == "oracle":
                         f = lambda: RF.exact_ids_reference(g.indptr, g.indices, g.edges, eid, True, False, False, 1)[0, 0]
+                    elif prob is None:  # its dense problem was not built: it cannot fit
+                        f = None
                     elif meth == "pot":
                         f = lambda: 1.0 - B.pot_emd_c(pa, pb, M)
                     elif meth == "emd2":
@@ -151,19 +206,14 @@ def part_a(a):
                         f = lambda: 1.0 - B.ortools_mcf(aint, bint, M) / L
                     else:
                         f = lambda: 1.0 - B.highs_lp(pa, pb, M)
-                    t0 = time.perf_counter()
-                    v0 = f()  # single call first: decides whether the method is within the budget
-                    once = time.perf_counter() - t0
-                    if once > a.budget:
-                        dead[key] = s
-                        tm, val = once, v0
-                    else:
-                        tm, val = _time_repeated(f, min_total=min(0.5, 10 * once + 0.05), max_reps=1000, warm=False)
-                    row[f"{meth}_s"] = tm
-                    row[f"{meth}_err"] = abs(float(val) - ref_val)
+                    need = _need(meth, n1, n2, row["S"])
+                    if f is None:
+                        need = max(need, 2 * (avail or 0) + 1)  # recorded as not fitting
+                    row.update(_method(parts, pk, meth, f, need, ref_val, a.repeat_below))
                 rows.add(row)
+                parts.drop(pk)
                 log(f"E2A {sweep} {regime:7s} s={s:5d} seed={seed} |S|={row['S']:6d} path={row['path']} "
-                    + " ".join(f"{m}={1e6 * row.get(m + '_s', float('nan')):.0f}us" for m in methods))
+                    + " ".join(f"{m}={1e6 * common.num(row, m + '_s'):.0f}us" for m in methods))
 
 
 def part_b(a):
@@ -212,17 +262,16 @@ def part_c(a):
     rows = Rows(f"{out_dir(a.out, 'e2')}/dasgupta.csv", ["kind", "n", "seed"])
     sizes = [2 ** k for k in range(8, 21, 2)] if not a.quick else [2 ** 8, 2 ** 10, 2 ** 12]
     methods = ["ours", "witness", "graphflow", "pot"]
-    dead = {}  # (kind, method) -> size at which it exceeded the budget (also before a restart)
-    for r in rows.rows:
-        for meth in methods:
-            if common.num(r, f"{meth}_s") > a.budget:
-                key, n_r = (r.get("kind"), meth), int(common.num(r, "n"))
-                dead[key] = min(dead.get(key, n_r), n_r)
+    import partial as PT
+
+    parts = PT.Parts(f"{out_dir(a.out, 'e2', 'partial')}/dasgupta.json")
     for kind in D.DASGUPTA_KINDS:
         for n_ in sizes:
             for seed in range(1 if a.quick else 2):
-                if rows.done(kind=kind, n=n_, seed=seed):
+                left, old = _row_left(rows, methods, kind=kind, n=n_, seed=seed)
+                if left is None:
                     continue
+                pk = (kind, n_, seed)
                 nv, e = D.dasgupta_instance(n_, kind, seed)
                 g = D.to_graph(nv, e)
                 eid = np.array([g.edge_id(0, 1)], np.int64)
@@ -231,17 +280,20 @@ def part_c(a):
                 row = dict(kind=kind, n=n_, seed=seed, m=g.num_edges, path=int(d[0, C.D_PATH]), nodes=int(d[0, C.D_NODES]),
                            arcs=int(d[0, C.D_ARCS]), value=ref,
                            local_input=int(g.deg[g.neighbors(0)].sum() + g.deg[g.neighbors(1)].sum()))
-                pot_ok = (n_ + 2) ** 2 <= a.max_pairs
-                if pot_ok:
+                if old is not None:  # a row given up in part: keep what it has, compute what is left
+                    row.update({k: v_ for k, v_ in old.items() if k not in row and not any(
+                        k.startswith(m + "_") for m in left)})
+                n1, n2 = int(g.deg[0]) + 1, int(g.deg[1]) + 1
+                avail = PT.memory_available()
+                prob = None
+                if "pot" in left and (avail is None or _need("pot", n1, n2, 0) <= avail):
                     lp = B.LocalProblems(g, "lazy")
                     tb, prob = _time_repeated(lambda: lp.build(int(eid[0]), True), min_total=0.1, max_reps=50)
                     pa, pb, M, L, aint, bint = prob
                     row["build_s"] = tb
                 gp = B.GraphFlowProblems(g, "lazy")
                 for meth in methods:
-                    key = (kind, meth)
-                    if (key in dead and n_ > dead[key]) or (meth == "pot" and not pot_ok):
-                        row[f"{meth}_s"] = float("nan")
+                    if meth not in left:
                         continue
                     if meth == "ours":
                         f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
@@ -250,20 +302,16 @@ def part_c(a):
                     elif meth == "graphflow":
                         f = lambda: gp.curvature(int(eid[0]))[0]
                     else:
-                        f = lambda: 1.0 - B.pot_emd_c(pa, pb, M)
-                    t0 = time.perf_counter()
-                    v0 = f()
-                    once = time.perf_counter() - t0
-                    if once > a.budget:
-                        dead[key] = n_
-                        tm, val = once, v0
-                    else:
-                        tm, val = _time_repeated(f, min_total=min(0.5, 10 * once + 0.05), max_reps=200, warm=False)
-                    row[f"{meth}_s"] = tm
-                    row[f"{meth}_err"] = abs(float(val) - ref)
+                        f = (lambda: 1.0 - B.pot_emd_c(pa, pb, M)) if prob is not None else None
+                    need = _need(meth, n1, n2, 0)
+                    if f is None:
+                        need = max(need, 2 * (avail or 0) + 1)  # recorded as not fitting
+                    row.update(_method(parts, pk, meth, f, need, ref, a.repeat_below))
                 rows.add(row)
+                parts.drop(pk)
                 log(f"E2C {kind:8s} n={n_:8d} m={g.num_edges:9d} path={row['path']} arcs={row['arcs']:8d} "
-                    + " ".join(f"{m}={1e3 * row.get(m + '_s', float('nan')):.3f}ms" for m in methods))
+                    + " ".join(f"{m}={1e3 * common.num(row, m + '_s'):.3f}ms" for m in methods)
+                    + "".join(f"  [{m}: {row[m + '_status']}]" for m in methods if row.get(m + "_status")))
 
 
 def main():
@@ -273,10 +321,12 @@ def main():
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--seeds", type=int, default=3)
-    ap.add_argument("--budget", type=float, default=30.0, help="seconds per solve above which a method stops growing")
+    ap.add_argument("--budget", type=float, default=30.0, help="part B only: seconds of timing per method and bin")
+    ap.add_argument("--repeat-below", type=float, default=30.0,
+                    help="parts A and C: a solve that takes longer is timed once instead of repeated (no method is "
+                         "ever skipped for time; only what cannot fit in the job's memory)")
     ap.add_argument("--per-bin", type=int, default=200)
     ap.add_argument("--ortools-max", type=int, default=4096, help="largest d_i + d_j bin for OR-Tools")
-    ap.add_argument("--max-pairs", type=float, default=5e7, help="part C: largest distance matrix given to POT")
     ap.add_argument("--quick", action="store_true")
     a = ap.parse_args()
     if a.quick:
