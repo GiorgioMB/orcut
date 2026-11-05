@@ -366,6 +366,12 @@ def grc_python(explicit: Optional[str] = None) -> Optional[str]:
     return p if p and os.path.exists(p) else None
 
 
+def grc_atd_need(n: int) -> float:
+    """Bytes GraphRicciCurvature needs for its all-pairs distances: it builds the n x n table from
+    n^2 Python floats before turning it into an array, about 40 n^2 bytes at the peak."""
+    return 40.0 * n * n
+
+
 def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3000, proc: int = 1,
         python: Optional[str] = None, timeout: Optional[float] = None, ids: Optional[np.ndarray] = None,
         shortest_path: str = "auto", workdir: Optional[str] = None):
@@ -376,6 +382,17 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
     py = grc_python(python)
     if py is None:
         return None, float("nan"), "unavailable"
+    if method == "ATD" and shortest_path == "auto":
+        # GraphRicciCurvature's ATD always reads the all-pairs distance table, which its pairwise mode
+        # (the runner's choice above 20000 vertices) never builds: it then fails with a KeyError on the
+        # first vertex. Give it all pairs, when they fit in the job's memory.
+        import partial as PT
+
+        need, avail = grc_atd_need(g.num_nodes), PT.memory_available()
+        if avail is not None and need > avail:
+            return None, float("nan"), (f"skipped: needs ~{need / 2**30:.0f} GB for the all-pairs distances of GRC's "
+                                        f"ATD, the job has {(PT.memory_limit() or 0) / 2**30:.0f} GB")
+        shortest_path = "all_pairs"
     with tempfile.TemporaryDirectory(dir=workdir, prefix="grc_") as d:
         np.savez(os.path.join(d, "in.npz"), n=g.num_nodes, edges=g.edges)
         cmd = [py, "-I", GRC_RUNNER, os.path.join(d, "in.npz"), os.path.join(d, "out.npz"), "--alpha", repr(alpha),
