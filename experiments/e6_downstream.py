@@ -125,12 +125,24 @@ def part_borf(a):
                                    "real:Coauthor-Physics", "real:GitHub"])
     if a.quick:
         graphs = ["bundled:jazz", "bundled:yeast", "synth:CL2.1:3000:8:0"]
+    import partial as PT
+
     grc_ok = B.grc_python(a.grc_python) is not None
+    grc_runs = PT.Parts(os.path.join(out_dir(a.out, "e6", "partial"), "grc.json"))  # the GRC runs under way
+    kept = 0
+    log(f"E6 GraphRicciCurvature: {B.grc_python(a.grc_python)}" if grc_ok else
+        "E6 GraphRicciCurvature unavailable: its rows are recorded as unavailable (see main.py's log)")
     for spec in graphs:
         name = R.display(spec)
         r = rows.get(graph=name, backend="grc")
         # without GRC, a row that already says "unavailable" stays as it is
         grc_left = not rows.done(graph=name, backend="grc") and (grc_ok or r is None or common.row_failed(r))
+        # a timeout of the old 2-hour limit runs now (there is no limit any more); so does a run given up
+        # by a job whose time or memory this one exceeds
+        grc_left = grc_left or (r is not None and grc_ok and (str(r.get("status") or "") == "timeout" or PT.retry_now(r)))
+        if grc_left and r is not None:
+            log(f"E6 {name:16s} grc computed again (was: {str(r.get('status'))[:60]})")
+        kept += int(not grc_left and r is not None and not rows.done(graph=name, backend="grc"))
         if not grc_left and all(rows.done(graph=name, backend=b) for b in ("orcut-full", "orcut-incremental")):
             continue
         name, g, meta = R.load(spec, a.data_dir)
@@ -161,20 +173,31 @@ def part_borf(a):
             same = np.array_equal(finals["orcut-full"].edges, finals["orcut-incremental"].edges)
             rows.add(dict(rows.rows[-1], same_final_graph=bool(same)))
         if grc_left:
+            extra = {}
             if grc_ok:
-                val, t, status = B.grc(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python, a.grc_timeout)
+                st, gave = grc_runs.resume((name,), "grc")
+                if st == "gave_up":  # killed by its job's time or memory limit: only a bigger job runs it again
+                    val, t, status = None, float("nan"), gave["status"]
+                    extra = {k: v for k, v in gave.items() if k != "status"}
+                else:
+                    grc_runs.begin((name,), "grc")
+                    val, t, status = B.grc(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python)
             else:
                 val, t, status = None, float("nan"), "unavailable"
-            row = dict(base, backend="grc", status=status, curv_per_iter_s=t)
+            row = dict(base, backend="grc", status=status, curv_per_iter_s=t, **extra)
             if val is not None:
                 import orcut
 
                 row["max_diff_vs_exact"] = float(np.max(np.abs(val - orcut.curvature(g, "nonlazy", n_jobs=a.threads))))
             rows.add(row)
+            grc_runs.drop((name,))
             log(f"E6B {name:16s} grc                {status:8s} curvature of all edges {t:9.2f}s")
+    if kept:
+        log(f"E6 {kept} GRC rows left as unavailable: GraphRicciCurvature is not available in this run")
 
 
 # ------------------------------------------------------------- community
+
 
 def sia(g, method="exact", measure=HALF, max_frac=1.0, check_every=0, threads=1, budget=None):
     """Sequential deletion of the most negatively curved edge with incremental updates.
@@ -290,7 +313,6 @@ def main():
     ap.add_argument("--check-every", type=int, default=None,
                     help="compare with a full recomputation every k iterations (default: borf 5, community 500)")
     ap.add_argument("--grc-python", default=None)
-    ap.add_argument("--grc-timeout", type=float, default=2 * 3600.0, help="seconds per GRC run")
     ap.add_argument("--sizes", nargs="+", type=int, default=[1000, 5000])
     ap.add_argument("--mus", nargs="+", type=float, default=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
     ap.add_argument("--seeds", type=int, default=5)
@@ -303,7 +325,7 @@ def main():
     if a.check_every is None:
         a.check_every = 5 if a.part == "borf" else 500
     if a.quick:
-        a.loops, a.check_every, a.grc_timeout = 4, (1 if a.part == "borf" else 100), 120.0
+        a.loops, a.check_every = 4, (1 if a.part == "borf" else 100)
     common.warm_jit()
     (part_borf if a.part == "borf" else part_community)(a)
 
