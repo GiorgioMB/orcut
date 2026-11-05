@@ -176,6 +176,16 @@ def support_pairs(g, ids, r):
     return out
 
 
+def radius_done(rows, name, cfg, a):
+    """The row is in the table, and is not one skipped for supports that the current limits admit
+    (a run with a larger --max-pairs computes the rows an earlier run skipped)."""
+    if not rows.done(graph=name, config=cfg):
+        return False
+    r = rows.get(graph=name, config=cfg)
+    return not (str(r.get("status") or "").startswith("skipped") and
+                common.num(r, "max_support_pairs") <= a.max_pairs)
+
+
 def part_radius(a):
     import numba
     import orcut
@@ -187,14 +197,14 @@ def part_radius(a):
         graphs = ["bundled:yeast", "bundled:jazz"]
     configs = [("ball", 2), ("ball", 3), ("walk", 2), ("walk", 3)]
     for spec in graphs:
-        if all(rows.done(graph=R.display(spec), config=f"{kind} r={r}") for kind, r in configs):
+        if all(radius_done(rows, R.display(spec), f"{kind} r={r}", a) for kind, r in configs):
             continue
         name, g, meta = R.load(spec, a.data_dir)
         strata = common.stratified_bins(g, a.per_bin, seed=2)
         ids_sample = np.concatenate([s_ for _, s_, _ in strata])
         for kind, r in configs:
             cfg = f"{kind} r={r}"
-            if rows.done(graph=name, config=cfg):
+            if radius_done(rows, name, cfg, a):
                 continue
             row = dict(graph=name, config=cfg, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"], threads=a.threads)
             # the reference implementation lists every pair of P x N: skip supports that are too large
@@ -204,10 +214,17 @@ def part_radius(a):
             if row["max_support_pairs"] > a.max_pairs:
                 row["status"] = f"skipped: supports up to {row['max_support_pairs']} pairs (> --max-pairs)"
                 rows.add(row)
-                log(f"E7R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs)")
+                log(f"E7R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs > --max-pairs)")
                 continue
-            f_all = (lambda ids=None: orcut.ball_curvature(g, r, edges=ids, n_jobs=a.threads)) if kind == "ball" else \
-                (lambda ids=None: orcut.walk_curvature(g, r, edges=ids, n_jobs=a.threads))
+            # every thread holds the pairs of its edge: fewer threads for large supports, so that
+            # all of them together hold at most --pairs-in-memory pairs (the memory of 32 threads
+            # on supports of 5 x 10^6 pairs, as before)
+            T = int(max(1, min(a.threads, a.pairs_in_memory // max(1, row["max_support_pairs"]))))
+            row["threads"] = T
+            if T < a.threads:
+                log(f"E7R {name:16s} {cfg:9s} supports up to {row['max_support_pairs']:,} pairs: {T} threads")
+            f_all = (lambda ids=None: orcut.ball_curvature(g, r, edges=ids, n_jobs=T)) if kind == "ball" else \
+                (lambda ids=None: orcut.walk_curvature(g, r, edges=ids, n_jobs=T))
             ids_all = np.concatenate([s for _, s, _ in strata])
             f_all(ids_all[:4])  # warm
             # whole graph when affordable, otherwise estimated from the strata
@@ -220,9 +237,9 @@ def part_radius(a):
             row["est_total_1thread_s"] = common.estimate_total(strata, times_o)
             # certificates on the sample (layered closure with certify=True)
             if kind == "ball":
-                _, diag = orcut.ball_curvature(g, r, edges=ids_all, n_jobs=a.threads, certify=True)
+                _, diag = orcut.ball_curvature(g, r, edges=ids_all, n_jobs=T, certify=True)
             else:
-                _, diag = orcut.walk_curvature(g, r, edges=ids_all, n_jobs=a.threads, certify=True)
+                _, diag = orcut.walk_curvature(g, r, edges=ids_all, n_jobs=T, certify=True)
             row["certified_share"] = float(np.mean(diag[:, 5] == 1))
             row["mean_P"] = float(np.mean(diag[:, 0]))
             row["mean_N"] = float(np.mean(diag[:, 1]))
@@ -264,8 +281,12 @@ def main():
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--per-bin", type=int, default=30)
     ap.add_argument("--whole-max-edges", type=int, default=2 * 10**5)
-    ap.add_argument("--max-pairs", type=float, default=5e6,
-                    help="skip a graph and support radius whose largest |B_r(i)| |B_r(j)| exceeds this (memory)")
+    ap.add_argument("--pairs-in-memory", type=float, default=32 * 5e6,
+                    help="part radius: support pairs held at once by all threads (about 100-250 bytes each); "
+                         "configurations with larger supports run with fewer threads")
+    ap.add_argument("--max-pairs", type=float, default=32 * 5e6,
+                    help="part radius: skip a graph and radius whose largest |B_r(i)| |B_r(j)| exceeds this "
+                         "(it would run on one thread)")
     ap.add_argument("--budget", type=float, default=600.0, help="seconds of POT per graph and configuration")
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)
