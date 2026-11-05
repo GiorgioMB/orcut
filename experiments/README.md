@@ -53,25 +53,29 @@ python experiments/main.py --steps artifacts --paper-dir ../paper/generated
 python experiments/main.py --status                            # what is done, failed or running
 ```
 
-**Checkpoints.** A job stopped by the scheduler (time limit, memory limit) or by a crash is
-resubmitted unchanged, and only what is left is computed.
+**Checkpoints.** A job stopped is resubmitted unchanged, and only what is left is computed.
 
 * *Steps.* A step that ends without errors is recorded in `results/status/<step>.json` and is not
-  run again (`--force` runs it anyway, e.g. `--steps e2-real --force`). A step that failed, was
+  run again (`--force` computes it again from scratch, e.g. `--steps e2-real --force`). A step that failed, was
   killed, or left rows that ended in an error runs again. `artifacts` runs again when the result
   tables changed since its last run; E5 (whole) and E6 (BORF), when completed without
   GraphRicciCurvature, run again once it is available (`--grc-python`, `ORCUT_GRC_PYTHON`).
 * *Rows.* Every step saves each result row as soon as it is computed and skips the rows already in
-  its tables; a graph whose rows are all there is not even loaded. Rows that hold no result
+  its tables; a graph whose rows are all there is not loaded. Rows that hold no result
   (status `error: ...` or `unavailable`) are computed again, and a step that ends with error rows
   exits with code 3 and is not recorded as done. A resumed step draws the same samples as an
   uninterrupted one and remembers which methods ran out of budget.
 * *One run per step.* While a step runs, `results/status/<step>.lock` keeps other jobs from running
-  it at the same time (e.g. `run_all.sbatch` resubmitted while an array task is still on that
-  step); the lock of a killed job goes stale after 10 minutes.
+  it at the same time; the lock of a killed job goes stale after 10 minutes.
 
-`--force` does not recompute rows: to recompute a table, delete it or some of its rows. The
-results of a `--quick` run and of a full run cannot share a directory. `results/status.json`
+Inside E3, a solve that takes hours (graphs above 10^7 edges, and synthetic sizes predicted to
+take over an hour) is also saved chunk by chunk in `results/e3/partial/`, and resumes at the next
+chunk; the log shows each chunk and an estimate of the time left.
+
+`--force` recomputes the selected steps from scratch: their result tables (and E3's saved chunks)
+are first moved to `results/replaced/<step>-<time>/`, so the old results are kept. Options after `--`
+go to the step itself, e.g. `sbatch --array=9 experiments/slurm/array.sbatch --force -- --budget 3600`.
+The results of a `--quick` run and of a full run cannot share a directory. `results/status.json`
 gathers the records of all steps and `results/environment.json` the machine and library versions;
 logs are in `results/logs/`.
 
@@ -100,8 +104,7 @@ parallel scaling and is therefore a lower bound on its parallel time. Edges whos
 problem would have more than 5 x 10^7 entries ((d_i + 1)(d_j + 1), gigabytes of cost matrix and
 plan) are not run and count as free, which keeps it a lower bound (`pot_free_share` in the table).
 The same guard protects the per-edge baselines of E1, E2, E4 and E5, and E7 skips graphs whose
-balls give more than 5 x 10^6 pairs (`--max-pairs`), which the reference implementation of the
-layered closure would list explicitly.
+balls give more than 5 x 10^6 pairs (`--max-pairs`).
 
 **Graph min-cost flow (Beckmann).** W1 on the hop metric is also the minimum cost of a flow on the
 graph itself, with unit cost per edge, supply m_i - m_j, and no distance matrix (Beckmann's
@@ -109,7 +112,8 @@ formulation). For one-step measures an optimal flow uses only the edge ij and ed
 in P u N, the vertices with non-zero net mass (every pair is joined by a shortest path of length at
 most 3 of this kind: xy; x, w, y; x, i, j, y), so `baselines.GraphFlowProblems` solves the min-cost
 flow on these edges, in both directions, with OR-Tools' `SimpleMinCostFlow` (integer masses,
-exact). The network has at most sum_{x in P u N} deg(x) + 1 edges, the size of the witness network. It is the strongest distance-free baseline we know; its time includes
+exact). The network has at most sum_{x in P u N} deg(x) + 1 edges, the size of the witness network. 
+It is the strongest distance-free baseline we know; its time includes
 building the arcs (numba) and is otherwise measured like the other baselines (E2, E4).
 
 **Exactness.** orcut returns W1 as an exact fraction; E1 compares it with OR-Tools' integer
@@ -120,7 +124,7 @@ optimal potential) are verified exactly by `orcut.certify` and re-verified from 
 distances, by `Certificate.verify`.
 
 **GRC.** Run end to end as a user would (its shortest paths, process pool and defaults:
-`alpha = 0.5`, `OTDSinkhornMix`, `nbr_topk = 3000`), with a time limit (`--grc-timeout`, 2 h);
+`alpha = 0.5`, `OTDSinkhornMix`, `nbr_topk = 3000`), with no time limit;
 all-pairs shortest paths up to 2 x 10^4 vertices (GRC materializes them as n^2 Python floats),
 pairwise beyond. When its default method times out on a graph, the other GRC methods are skipped.
 The exact reference at idleness 1/2 equals half the Lin--Lu--Yau curvature on every edge (Bourne et
