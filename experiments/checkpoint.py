@@ -9,11 +9,13 @@ never overwrite each other's; ``<out>/status.json`` gathers all records and is o
 read as well.
 
 While a step runs, ``<out>/status/<step>.lock`` names the host, process and job that run it, and
-main.py touches it every minute. Another main.py that finds a fresh lock skips the step rather
-than run it a second time at once (both would rewrite the same result tables). A lock that nobody
-touched for ``STALE_S`` seconds, or whose process is gone (same host), was left by a run that was
-killed: it is taken over. The lock is advisory: two runs that find the same stale lock in the
-same instant may both start.
+main.py touches it every minute. Another main.py that finds the lock skips the step rather than run
+it a second time at once (both would rewrite the same result tables), unless the run that holds it
+is gone: Slurm says its job has ended (killed, cancelled, out of memory, time limit), or it is this
+very job restarted, or (without Slurm) its process is not running on this host, or nobody touched
+the lock for ``STALE_S`` seconds. A job that is still completing gets ``ENDING_WAIT_S`` seconds to
+release it. The lock is advisory: two runs that find the same stale lock in the same instant may
+both start.
 """
 from __future__ import annotations
 
@@ -21,14 +23,20 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import socket
+import subprocess
 import time
 import uuid
 from typing import List, Optional, Tuple
 
 import xio
 
-STALE_S = 600.0       # a lock not touched for this long is stale
+STALE_S = 300.0       # when Slurm cannot be asked: a lock not touched for this long is stale (touched every minute)
+ENDING_WAIT_S = 120.0  # a lock whose job is completing (being killed) is given this long to be released
+# Slurm states of a job that may still be running main.py; any other state, or a job Slurm no longer
+# knows, means the job that holds a lock has ended (killed, cancelled, out of memory, time limit...)
+ALIVE = {"RUNNING", "CONFIGURING", "SUSPENDED", "STOPPED", "RESIZING", "SIGNALING", "STAGE_OUT", "COMPLETING"}
 EXIT_INCOMPLETE = 3   # exit code of a step that finished with rows that ended in an error (common.finish)
 
 
@@ -52,6 +60,22 @@ def job_id() -> Optional[str]:
     """The SLURM job (``<array job>_<task>`` for a job array), or None."""
     arr, task = os.environ.get("SLURM_ARRAY_JOB_ID"), os.environ.get("SLURM_ARRAY_TASK_ID")
     return f"{arr}_{task}" if arr and task else os.environ.get("SLURM_JOB_ID")
+
+
+def slurm_job_state(job: Optional[str]) -> Optional[str]:
+    """The state Slurm reports for ``job`` (e.g. "RUNNING"); "" if Slurm no longer has it (it ended);
+    None if Slurm cannot be asked (no squeue, or squeue failed)."""
+    sq = shutil.which("squeue") if job else None
+    if not sq:
+        return None
+    try:
+        p = subprocess.run([sq, "-h", "-j", str(job), "-o", "%T"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return "" if "invalid job id" in (p.stderr or "").lower() else None
+    states = [x.strip() for x in (p.stdout or "").split() if x.strip()]
+    return states[0] if states else ""
 
 
 def state(rc: Optional[int]) -> str:
@@ -151,6 +175,7 @@ class StepLock:
         self.stale_s = stale_s
         self.token = uuid.uuid4().hex
         self.held = False
+        self.took_over = None  # why the lock of a run that is gone was taken over, if it was
 
     def info(self) -> Tuple[dict, Optional[float]]:
         """(contents, seconds since the holder last touched it) of the lock, ({}, None) if none."""
@@ -161,40 +186,66 @@ class StepLock:
         info = xio.read_json(self.path, default={})
         return (info if isinstance(info, dict) else {}), age
 
-    def stale(self, info: dict, age: float) -> bool:
-        if age > self.stale_s:
-            return True
+    def holder(self, info: dict, age: float) -> Tuple[str, str]:
+        """("alive" | "ending" | "gone", why) for the process that holds the lock. If the lock names a
+        Slurm job, Slurm decides (a lock left by a job that was killed is taken over at once); else
+        the process, if it ran on this host; else the time since it was last touched."""
+        job = info.get("job")
+        if job and job == job_id():
+            return "gone", f"it was taken by this job ({job}) before it restarted"
+        st = slurm_job_state(job) if job else None
+        if st is not None:
+            if st == "COMPLETING":
+                return "ending", f"job {job} is completing"
+            if st in ALIVE:
+                return "alive", f"job {job} is {st}"
+            return "gone", f"job {job} " + (f"is {st}" if st else "has ended")
         pid = info.get("pid")
         if info.get("host") == socket.gethostname() and isinstance(pid, int) and pid > 0:
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
-                return True
+                return "gone", f"process {pid} has ended"
             except OSError:
-                return False
-        return False
+                pass
+            else:
+                return "alive", f"process {pid} is running"
+        if age > self.stale_s:
+            return "gone", f"not touched for {age:.0f}s"
+        return "alive", (f"Slurm cannot be asked about job {job}; " if job else "") + \
+            f"touched {age:.0f}s ago (stale after {self.stale_s:.0f}s)"
 
-    def describe(self, info: dict, age: float) -> str:
+    def stale(self, info: dict, age: float) -> bool:
+        return self.holder(info, age)[0] != "alive"
+
+    def describe(self, info: dict, age: float, why: str = "") -> str:
         who = f"{info.get('host', '?')} (pid {info.get('pid', '?')}" + (f", job {info['job']}" if info.get("job") else "")
-        return (f"running on {who}) since {info.get('started', '?')}, seen {age:.0f}s ago; if that run is gone, "
-                f"delete {self.path} or wait {self.stale_s - age:.0f}s")
+        return (f"running on {who}) since {info.get('started', '?')}" + (f": {why}" if why else "") +
+                f"; if that run is gone, delete {self.path}")
 
     def acquire(self) -> "StepLock":
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         me = dict(token=self.token, host=socket.gethostname(), pid=os.getpid(), job=job_id(), started=now())
-        for _ in range(3):
+        waited = 0.0
+        for _ in range(100):
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:
                 info, age = self.info()
                 if age is None:
                     continue  # released meanwhile
-                if not self.stale(info, age):
-                    raise Busy(self.describe(info, age))
+                verdict, why = self.holder(info, age)
+                if verdict == "alive":
+                    raise Busy(self.describe(info, age, why))
+                if verdict == "ending" and waited < ENDING_WAIT_S:
+                    time.sleep(10)  # its main.py may still release it
+                    waited += 10
+                    continue
                 try:
                     os.remove(self.path)  # left by a run that was killed
                 except FileNotFoundError:
                     pass
+                self.took_over = why
                 continue
             with os.fdopen(fd, "w") as fh:
                 json.dump(me, fh)
