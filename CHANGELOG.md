@@ -22,9 +22,12 @@ resume without losing or repeating work.
   of E3's long solves), and a part killed by its job's memory or time limit, as reported by Slurm,
   is tried again only by a job with more of it (`experiments/partial.py`). A resumed step draws the
   same samples as an uninterrupted one.
-- No time budgets: E2 parts A and C time every method at every size (the 30 s rule, the size cap of
-  HiGHS and the fixed caps of the dense solvers are gone; a method is skipped only if its problem
-  cannot fit in the job's memory, with the reason in `<method>_status`); E3's POT estimate and E5's
+- No time budgets: E2 parts A and C time every method at every size (the 30 s rule and the fixed
+  caps of the dense solvers are gone; a method is skipped only if its problem cannot fit in the
+  job's memory, with the reason in `<method>_status`), except HiGHS, which runs on LPs of up to
+  4098^2 variables (`--highs-max-vars`: the sym sweep up to s = 4096 and the whole hub sweep; it
+  grows about tenfold per doubling of s, half an hour per solve at s = 4096, days beyond); E3's
+  POT estimate and E5's
   Sinkhorn part time every sampled edge, with dense problems up to what fits in the job's memory;
   GraphRicciCurvature runs (E5, E6) have no time limit.
 - E3: graphs above 10^7 edges, and synthetic rows predicted to take over an hour, are solved in one
