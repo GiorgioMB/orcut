@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orcut"
-version = "1.2.0"
+version = "1.3.0"
 description = "Exact Ollivier-Ricci curvature of graphs with one minimum cut per edge"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10,<3.14"
-dependencies = [
+dependencies = [  # the versions of the experiments of the paper (results/environment.json)
     "numba==0.62.1",
-    "numpy==2.2.0",
-    "scipy==1.16.2",
+    "numpy==2.2.5",
+    "scipy==1.16.3",
 ]
 
 [project.optional-dependencies]

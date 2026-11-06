@@ -1,6 +1,7 @@
 #!/bin/bash
 # All experiments of the paper on one node, in order (resumable: resubmit after a time-out).
 #   sbatch experiments/slurm/run_all.sbatch
+#   sbatch experiments/slurm/run_all.sbatch --force             # options after the script go to main.py
 # Before: download the data on a node with network access (compute nodes usually have none):
 #   python experiments/datasets.py --data-dir "$ORCUT_DATA"
 # and create the two environments (see experiments/README.md): orcut (environment.yml) and,
@@ -34,9 +35,9 @@ fi
 cd "$ROOT"
 : "${ORCUT_DATA:=$ROOT/experiments/data/real}"
 : "${ORCUT_RESULTS:=$ROOT/results}"
-: "${ORCUT_GRC_PYTHON:=$(conda run -n orcut-grc which python 2>/dev/null || true)}"
-export ORCUT_GRC_PYTHON
+# GraphRicciCurvature: main.py looks for the orcut-grc environment (next to the environment
+# running it, or with conda) and logs what it found; ORCUT_GRC_PYTHON=<its python> overrides.
 THREADS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1   # numba threads only
 export NUMBA_NUM_THREADS="$THREADS"
-python experiments/main.py --threads "$THREADS" --out "$ORCUT_RESULTS" --data-dir "$ORCUT_DATA"
+python experiments/main.py --threads "$THREADS" --out "$ORCUT_RESULTS" --data-dir "$ORCUT_DATA" ${1+"$@"}

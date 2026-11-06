@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.3.0
+
+The version of the arXiv paper. The solver is unchanged from 1.2.0 (the same values); the changes
+are in the experiments, which can now run for weeks on a cluster, be stopped at any point, and
+resume without losing or repeating work.
+
+- Pipeline (`experiments/main.py`): every step gets absolute paths. main.py up to 1.2.0 ran the
+  steps from `experiments/` with the relative `--out` and `--data-dir` of the SLURM scripts, so
+  tables went to `experiments/results/` and downloads to `experiments/experiments/data/real/`; what
+  such a run left there is moved into place (a table found in both places is merged row by row).
+  A step that ends without errors is recorded in `<out>/status/<step>.json` and not run again;
+  `--status` lists the steps; `--force` recomputes the selected steps from scratch, after moving
+  their tables to `<out>/replaced/`; options after `--` go to the step itself; a step whose rules
+  changed runs again for the rows they now compute. A lock per running step keeps two jobs from
+  running it at once, and the lock of a job that Slurm reports as ended is taken over at once;
+  SIGTERM (time limit, `scancel`) is recorded as an interruption.
+- Checkpoints inside the steps: rows that hold no result (`error: ...`, `unavailable`) are computed
+  again, and a step that ends with such rows exits with code 3. Long work is saved as it goes (each
+  method's solve in E2, each timed edge of E3's POT estimate and of E5's Sinkhorn part, each chunk
+  of E3's long solves), and a part killed by its job's memory or time limit, as reported by Slurm,
+  is tried again only by a job with more of it (`experiments/partial.py`). A resumed step draws the
+  same samples as an uninterrupted one.
+- No time budgets: E2 parts A and C time every method at every size (the 30 s rule, the size cap of
+  HiGHS and the fixed caps of the dense solvers are gone; a method is skipped only if its problem
+  cannot fit in the job's memory, with the reason in `<method>_status`); E3's POT estimate and E5's
+  Sinkhorn part time every sampled edge, with dense problems up to what fits in the job's memory;
+  GraphRicciCurvature runs (E5, E6) have no time limit.
+- E3: graphs above 10^7 edges, and synthetic rows predicted to take over an hour, are solved in one
+  pass by saved chunks (balanced by the size of their two-hop scans); their time is the sum over
+  the chunks. Skitter and LiveJournal also get the non-lazy and LLY measures (Orkut: lazy only).
+  Synthetic rows are matched by their requested size (`n_target`: rows recorded only the size of
+  the largest component, and were computed again on every run), and rows predicted to take over
+  two days per solve run after all the others.
+- E5: GraphRicciCurvature's ATD gets all-pairs distances (in its pairwise mode, used above 2 x 10^4
+  vertices, it fails with a KeyError). E7 (radius): large supports run with fewer threads instead
+  of being skipped.
+- SLURM scripts: both find the repository wherever `sbatch` is called from and pass their
+  arguments on to `main.py`; `array.sbatch` also finds the `orcut` and `orcut-grc` environments
+  itself (none needs to be active) and stops a GRC step at once if GraphRicciCurvature does not
+  import.
+- Environments: `environment.yml` and `experiments/grc-environment.yml` pin the versions that ran
+  the experiments of the paper; `pyproject.toml` pins numpy 2.2.5 and scipy 1.16.3 accordingly.
+
+## 1.2.1
+
+- Experiments: the unpickler of the downloaded Planetoid datasets accepts the Python 2 name of the
+  builtins (`__builtin__`) that the files use; Cora, CiteSeer and PubMed did not load.
+
 ## 1.2.0
 
 - Witness relays (`F_WITNESS`, on by default: `F_ALL = 31`). A pair of P x N at distance 2 has a

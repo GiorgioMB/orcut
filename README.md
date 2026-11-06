@@ -36,6 +36,9 @@ pytest -q
 ```
 
 ## Versions
+* **1.3.0** (the version of the arXiv paper): the solver is unchanged; the experiments resume
+  from wherever a job was stopped (checkpoints per step, per row and inside rows), run without time
+  budgets, and find their environments on SLURM. See CHANGELOG.md.
 * **1.2.1**: fixed the unpickler for downloaded Planetoid datasets to support loading Python 2 `__builtin__` containers.
 * **1.2.0**: witness relays (one zero-weight relay per common neighbour) for the pairs at distance 2
   that the bitset network would list one by one, chosen per edge when the network gets smaller; a

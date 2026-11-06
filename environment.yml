@@ -1,16 +1,18 @@
 # conda-forge environment for orcut and its experiments (no PyPI needed):
 #   conda env create -f environment.yml && conda activate orcut
 #   pip install --no-index --no-deps --no-build-isolation -e .
-# GraphRicciCurvature (one baseline of the experiments) needs scipy <= 1.13: see
-# experiments/grc-environment.yml for its own environment.
+# The pinned versions are those of the experiments of the paper (Python 3.12.16, recorded in
+# results/environment.json). GraphRicciCurvature (one baseline of the experiments) needs
+# scipy <= 1.13: see experiments/grc-environment.yml for its own environment, which the SLURM
+# scripts find when it is created next to this one (same environments folder).
 name: orcut
 channels:
   - conda-forge
 dependencies:
   - python=3.12
-  - numpy=2.2
-  - scipy=1.16
-  - numba=0.62
+  - numpy=2.2.5
+  - scipy=1.16.3
+  - numba=0.62.1
   - setuptools>=68
   - pip
   # tests
@@ -20,5 +22,5 @@ dependencies:
   # experiments
   - pandas
   - matplotlib
-  - pot=0.9          # POT: network simplex and Sinkhorn baselines
-  - ortools-python   # OR-Tools integer min-cost flow baseline
+  - pot=0.9.7        # POT: network simplex and Sinkhorn baselines
+  - ortools-python=9.15  # OR-Tools integer min-cost flow baseline

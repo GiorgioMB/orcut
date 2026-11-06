@@ -1,5 +1,6 @@
 """The checkpoints of the experiment pipeline (experiments/main.py, checkpoint.py, common.Rows), with
 fake steps: a step that ended without errors is not run again, anything else is."""
+import glob
 import json
 import os
 import signal
@@ -23,7 +24,8 @@ FAKE = textwrap.dedent("""\
     name, out = sys.argv[1], sys.argv[sys.argv.index("--out") + 1]
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "calls.jsonl"), "a") as fh:
-        fh.write(json.dumps({"step": name, "argv": sys.argv[1:], "cwd": os.getcwd()}) + "\\n")
+        fh.write(json.dumps({"step": name, "argv": sys.argv[1:], "cwd": os.getcwd(),
+                             "grc_env": os.environ.get("ORCUT_GRC_PYTHON")}) + "\\n")
     rc = os.path.join(out, "rc-" + name)
     code = int(open(rc).read()) if os.path.exists(rc) else 0
     if code == 99:  # run until killed
@@ -37,10 +39,12 @@ def fake(tmp_path, monkeypatch):
     """A table of fake steps s1, s2 and e5-whole (a GRC step); returns (run, calls, out)."""
     script = tmp_path / "fake.py"
     script.write_text(FAKE)
-    steps = {s: ([str(script), s], "fake") for s in ("s1", "s2", "e5-whole")}
+    steps = {s: ([str(script), s], "fake") for s in ("s1", "s2", "e5-whole", "e7-radius")}
     out = tmp_path / "out"
     monkeypatch.setattr(common, "environment", lambda: {"git": "abc"})
     monkeypatch.delenv("ORCUT_GRC_PYTHON", raising=False)
+    monkeypatch.setattr(M, "GRC_ENV", "no-such-environment")  # do not find a real orcut-grc next to this python
+    monkeypatch.setenv("CONDA_EXE", str(tmp_path / "no-conda"))  # nor through conda
 
     def run(*args):
         return M.main(["--out", str(out), *args], steps=steps)
@@ -90,8 +94,8 @@ def test_killed_step_is_recorded_and_runs_again(fake, monkeypatch):
     _rc(out, "s1", 0)
     real_run = M._run
 
-    def killed(cmd, log_path, lock):
-        real_run(cmd, log_path, lock)
+    def killed(cmd, log_path, lock, env=None):
+        real_run(cmd, log_path, lock, env)
         return -9  # what subprocess reports for a step killed by SIGKILL (the out-of-memory killer)
 
     monkeypatch.setattr(M, "_run", killed)
@@ -103,12 +107,51 @@ def test_killed_step_is_recorded_and_runs_again(fake, monkeypatch):
     assert calls() == ["s1", "s1"]
 
 
-def test_force_runs_a_completed_step(fake):
+def test_force_recomputes_everything_and_keeps_the_old_results(fake, tmp_path):
+    run, calls, out = fake
+    check = tmp_path / "check.py"  # a step that reports which of its tables exist when it starts
+    check.write_text(textwrap.dedent("""\
+        import json, os, sys
+        out = sys.argv[sys.argv.index("--out") + 1]
+        seen = {p: os.path.exists(os.path.join(out, p)) for p in
+                ("e5/sinkhorn.csv", "e5/whole.csv", "e3/real.csv", "e3/partial/orkut.lazy.T32.json",
+                 "e3/partial/synth.cl2.1.fixed16.n1000000.s0.T32.json")}
+        open(os.path.join(out, "seen-" + sys.argv[1] + ".json"), "w").write(json.dumps(seen))
+    """))
+    steps = {s_: ([str(check), s_], "x") for s_ in ("e5-sinkhorn", "e3-real")}
+    for rel, text in (("e5/sinkhorn.csv", "graph,method,reg\nG,orcut,0.0\nG,pot,0.0\n"), ("e5/whole.csv", "graph\nG\n"),
+                      ("e3/real.csv", "graph,measure\nG,lazy\n"), ("e3/partial/orkut.lazy.T32.json", "{}"),
+                      ("e3/partial/synth.cl2.1.fixed16.n1000000.s0.T32.json", "{}")):
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        (out / rel).write_text(text)
+    assert M.main(["--out", str(out), "--steps", "e5-sinkhorn", "e3-real", "--force"], steps=steps) == 0
+    s5 = json.loads((out / "seen-e5-sinkhorn.json").read_text())
+    s3 = json.loads((out / "seen-e3-real.json").read_text())
+    assert not s5["e5/sinkhorn.csv"] and s5["e5/whole.csv"]               # its own table only
+    assert not s3["e3/real.csv"] and not s3["e3/partial/orkut.lazy.T32.json"]
+    assert s3["e3/partial/synth.cl2.1.fixed16.n1000000.s0.T32.json"]      # e3-synth's chunks stay
+    kept = sorted(os.path.relpath(f, out) for f in glob.glob(str(out / "replaced" / "**" / "*"), recursive=True)
+                  if os.path.isfile(f))
+    assert [k.split(os.sep, 2)[2] for k in kept] == ["e3/partial/orkut.lazy.T32.json", "e3/real.csv", "e5/sinkhorn.csv"]
+    assert "G,pot" in open(glob.glob(str(out / "replaced" / "e5-sinkhorn-*" / "e5" / "sinkhorn.csv"))[0]).read()
+
+
+def test_every_table_belongs_to_one_step():
+    owners = {}
+    for step, pats in M.STEP_OUTPUTS.items():
+        assert step in M.STEPS
+        for p_ in pats:
+            if p_.endswith(".csv"):
+                owners.setdefault(p_, []).append(step)
+    assert sorted(owners) == sorted(M.TABLE_KEYS) and all(len(v) == 1 for v in owners.values())
+    assert set(M.STEP_OUTPUTS) == set(M.STEPS)
+
+
+def test_force_on_a_completed_step_runs_it(fake):
     run, calls, out = fake
     assert run("--steps", "s1") == 0
     assert run("--steps", "s1", "--force") == 0
     assert calls() == ["s1", "s1"]
-
 
 def test_records_of_old_main_py(fake):
     """status.json written by main.py up to v1.2.0: exit 0 counts as done, -9 does not."""
@@ -126,11 +169,18 @@ def test_records_of_old_main_py(fake):
     assert CK.load(str(out), "s2") is None
 
 
+def _fake_grc(path, imports=True):
+    """A stand-in for the python of the GRC environment, answering main.py's import check."""
+    path.write_text("#!/bin/sh\n" + ("echo 0.6.1\n" if imports else
+                                       "echo \"ModuleNotFoundError: No module named 'GraphRicciCurvature'\" >&2; exit 1\n"))
+    path.chmod(0o755)
+    return path
+
+
 def test_grc_step_runs_again_once_grc_is_available(fake, tmp_path):
     run, calls, out = fake
     assert run("--steps", "e5-whole") == 0
-    py = tmp_path / "grcpython"
-    py.write_text("")
+    py = _fake_grc(tmp_path / "grcpython")
     assert run("--steps", "e5-whole", "--grc-python", str(py)) == 0
     assert run("--steps", "e5-whole", "--grc-python", str(py)) == 0
     assert calls() == ["e5-whole", "e5-whole"]
@@ -152,7 +202,7 @@ def test_status_lists_every_step(fake, capsys):
     assert run("--status") == 0
     lines = capsys.readouterr().out.splitlines()
     state = {ln.split()[0]: ln.split()[1] for ln in lines[1:]}
-    assert state == {"s1": "done", "s2": "failed", "e5-whole": "not", "artifacts": "not"}
+    assert state == {"s1": "done", "s2": "failed", "e5-whole": "not", "e7-radius": "not", "artifacts": "not"}
 
 
 # ---------------------------------------------------------------- locks
@@ -199,18 +249,49 @@ def test_relative_paths_reach_the_steps_absolute(fake, tmp_path, monkeypatch):
     assert call["argv"][call["argv"].index("--data-dir") + 1] == str(work / "dd")
 
 
-def test_tables_in_the_old_place_stop_the_run(fake, tmp_path, monkeypatch):
+def test_tables_in_the_old_place_are_moved_and_merged(fake, tmp_path, monkeypatch):
+    """What main.py up to v1.2.0 left in experiments/results and experiments/experiments/data/real
+    is moved into place, and a table in both places is merged row by row; then the steps run."""
     run, calls, out = fake
     root = tmp_path / "repo"
-    monkeypatch.setattr(M, "HERE", str(root / "experiments"))
-    (root / "experiments" / "results" / "e1").mkdir(parents=True)
-    (root / "experiments" / "results" / "e1" / "exactness.csv").write_text("graph,measure\n")
+    here = root / "experiments"
+    monkeypatch.setattr(M, "HERE", str(here))
+    old, new = here / "results", root / "results"
+    for d in ("e1", "e5", "e5/values"):
+        (old / d).mkdir(parents=True, exist_ok=True)
+    (new / "e5").mkdir(parents=True)
+    (old / "e1" / "exactness.csv").write_text("graph,measure,x\nG,lazy,1\n")       # only in the old place
+    (old / "e5" / "values" / "g.npz").write_bytes(b"npz")
+    (new / "e5" / "whole.csv").write_text("graph,method,status,t\nG,orcut,,1\nG,grc-mix,ok,5\nH,orcut,,2\n")
+    os.utime(new / "e5" / "whole.csv", (1, 1))  # the older copy
+    (old / "e5" / "whole.csv").write_text("graph,method,status,t\nG,orcut,,9\nG,grc-mix,unavailable,\n"
+                                          "G,grc-otd,error: x,\n")
+    (here / "experiments" / "data" / "real").mkdir(parents=True)
+    (here / "experiments" / "data" / "real" / "com_x.npz").write_bytes(b"data")
     steps = {"s1": ([str(tmp_path / "fake.py"), "s1"], "fake")}
-    assert M.main(["--out", str(root / "results"), "--steps", "s1"], steps=steps) == 2
-    assert M.main(["--out", str(root / "results"), "--steps", "s1", "--ignore-old-layout"], steps=steps) == 0
+    assert M.main(["--out", str(new), "--steps", "s1"], steps=steps) == 0
+    assert not glob.glob(str(old / "e*" / "**" / "*"), recursive=True)
+    assert (new / "e1" / "exactness.csv").read_text() == "graph,measure,x\nG,lazy,1\n"
+    assert (new / "e5" / "values" / "g.npz").read_bytes() == b"npz"
+    got = {(r["graph"], r["method"]): r for r in common.read_csv(str(new / "e5" / "whole.csv"))}
+    assert got[("G", "orcut")]["t"] == "9"             # the newer copy's row
+    assert got[("G", "grc-mix")]["status"] == "ok"     # a row with a result beats the newer one without
+    assert got[("G", "grc-otd")]["status"] == "error: x" and got[("H", "orcut")]["t"] == "2"
+    assert (here / "data" / "real" / "com_x.npz").read_bytes() == b"data"
+    assert calls() == []  # the fake step writes its calls into --out: here new/calls.jsonl
+    assert len((new / "calls.jsonl").read_text().splitlines()) == 1
+    # nothing left to move: the next run does not touch anything
+    assert M._adopt_old_layout(str(new), None) == []
 
 
-# ------------------------------------------------------------ artifacts
+def test_table_keys_match_the_experiments():
+    import re
+    found = {}
+    for f in glob.glob(os.path.join(EXP, "e[1-7]_*.py")):
+        for d, name, key in re.findall(r"Rows\(f\"\{out_dir\(a\.out, '(e[1-7])'\)\}/([\w.]+)\", (\[[^\]]*\])\)",
+                                       open(f).read()):
+            found[f"{d}/{name}"] = json.loads(key)
+    assert found == M.TABLE_KEYS
 
 def test_artifacts_run_again_when_the_tables_change(fake, tmp_path, monkeypatch):
     run, calls, out = fake
@@ -289,3 +370,200 @@ def test_rows_without_a_result_are_computed_again(tmp_path, monkeypatch):
     assert t.done(graph="G", method="grc-atd") and len(t.rows) == 4
     monkeypatch.setattr(common, "_TABLES", [t])
     assert common.finish() == 0
+
+
+def test_radius_rows_skipped_for_size_run_again_when_they_fit(tmp_path, monkeypatch):
+    import argparse
+    import e7_generality as E7
+    monkeypatch.setattr(common, "_TABLES", [])
+    t = common.Rows(str(tmp_path / "radius.csv"), ["graph", "config"])
+    t.add(dict(graph="BA", config="ball r=3", max_support_pairs=22810160,
+               status="skipped: supports up to 22810160 pairs (> --max-pairs)"))
+    t.add(dict(graph="BA", config="ball r=2", max_support_pairs=4000000, certified_share=1.0))
+    t = common.Rows(str(tmp_path / "radius.csv"), ["graph", "config"])
+    old, new = argparse.Namespace(max_pairs=5e6), argparse.Namespace(max_pairs=1.6e8)
+    assert E7.radius_done(t, "BA", "ball r=3", old) and not E7.radius_done(t, "BA", "ball r=3", new)
+    assert E7.radius_done(t, "BA", "ball r=2", new) and not E7.radius_done(t, "BA", "walk r=2", new)
+
+
+def test_grc_that_does_not_import_counts_as_unavailable(fake, tmp_path, monkeypatch, capsys):
+    run, calls, out = fake
+    py = _fake_grc(tmp_path / "grcpython", imports=False)
+    monkeypatch.setenv("ORCUT_GRC_PYTHON", str(py))
+    assert run("--steps", "e5-whole") == 0
+    assert "graphriccicurvature unavailable" in capsys.readouterr().out.lower()
+    call = json.loads((out / "calls.jsonl").read_text().splitlines()[-1])
+    assert "--grc-python" not in call["argv"] and call["grc_env"] is None  # the step is not given it either
+    assert CK.load(str(out), "e5-whole")["config"]["grc"] is None
+    _fake_grc(py, imports=True)  # installed: the step runs again, with it
+    assert run("--steps", "e5-whole") == 0
+    call = json.loads((out / "calls.jsonl").read_text().splitlines()[-1])
+    assert call["argv"][-2:] == ["--grc-python", str(py)] and calls() == ["e5-whole", "e5-whole"]
+
+
+def test_grc_environment_next_to_this_one_is_found(tmp_path, monkeypatch):
+    envs = tmp_path / "conda_envs"
+    (envs / "orcut" / "bin").mkdir(parents=True)
+    py = _fake_grc((envs / "orcut-grc" / "bin").mkdir(parents=True) or envs / "orcut-grc" / "bin" / "python")
+    monkeypatch.delenv("ORCUT_GRC_PYTHON", raising=False)
+    monkeypatch.setattr(M.sys, "prefix", str(envs / "orcut"))
+    p, src = M._grc_python(None)
+    assert p == str(py) and "next to" in src
+    monkeypatch.setenv("ORCUT_GRC_PYTHON", "/elsewhere/python")  # an explicit choice wins
+    assert M._grc_python(None)[0] == "/elsewhere/python"
+
+
+def test_steps_completed_under_older_rules_run_again(fake):
+    """e7-radius recorded by main.py up to v1.2.0 (it skipped large supports) runs again, once."""
+    run, calls, out = fake
+    out.mkdir()
+    (out / "status.json").write_text(json.dumps({"e7-radius": {"returncode": 0, "seconds": 1.0, "finished": "x",
+                                                              "quick": False}}))
+    assert run("--steps", "e7-radius") == 0
+    assert run("--steps", "e7-radius") == 0
+    assert calls() == ["e7-radius"] and CK.load(str(out), "e7-radius")["config"]["rules"] == M.RULES["e7-radius"]
+
+
+def _squeue(tmp_path, monkeypatch, out="", rc=0, err=""):
+    """A stand-in for Slurm's squeue on PATH, answering every job with ``out``."""
+    b = tmp_path / "bin"
+    b.mkdir(exist_ok=True)
+    (b / "squeue").write_text(f"#!/bin/sh\nprintf '%s' '{out}'\nprintf '%s' '{err}' >&2\nexit {rc}\n")
+    (b / "squeue").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{b}{os.pathsep}{os.environ['PATH']}")
+
+
+def _lock_of(tmp_path, job, age=0.0, host="another-node"):
+    lk = CK.StepLock(str(tmp_path), "s")
+    os.makedirs(os.path.dirname(lk.path), exist_ok=True)
+    with open(lk.path, "w") as fh:
+        json.dump({"token": "x", "host": host, "pid": 1, "job": job, "started": "then"}, fh)
+    os.utime(lk.path, (time.time() - age,) * 2)
+    return lk
+
+
+@pytest.mark.parametrize("answer,rc,err,taken", [
+    ("", 0, "", True),                                   # the job is no longer in the queue
+    ("", 1, "slurm_load_jobs error: Invalid job id specified", True),
+    ("CANCELLED", 0, "", True), ("OUT_OF_MEMORY", 0, "", True), ("TIMEOUT", 0, "", True),
+    ("RUNNING", 0, "", False),
+])
+def test_lock_of_a_job_that_ended_is_taken_over_at_once(tmp_path, monkeypatch, answer, rc, err, taken):
+    _squeue(tmp_path, monkeypatch, answer, rc, err)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_ARRAY_JOB_ID", raising=False)
+    _lock_of(tmp_path, "21348862_6", age=5)  # touched 5 s ago: a heartbeat alone would call it alive
+    lk = CK.StepLock(str(tmp_path), "s")
+    if taken:
+        lk.acquire()
+        assert lk.held and "21348862_6" in lk.took_over
+        lk.release()
+    else:
+        with pytest.raises(CK.Busy, match="RUNNING"):
+            lk.acquire()
+
+
+def test_lock_of_a_completing_job_waits_then_is_taken_over(tmp_path, monkeypatch):
+    _squeue(tmp_path, monkeypatch, "COMPLETING")
+    monkeypatch.setattr(CK, "ENDING_WAIT_S", 0.0)
+    _lock_of(tmp_path, "123", age=5)
+    lk = CK.StepLock(str(tmp_path), "s").acquire()
+    assert lk.held and "completing" in lk.took_over
+    lk.release()
+
+
+def test_lock_without_slurm_falls_back_to_the_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))  # no squeue
+    _lock_of(tmp_path, "123", age=5)
+    with pytest.raises(CK.Busy):
+        CK.StepLock(str(tmp_path), "s").acquire()
+    _lock_of(tmp_path, "123", age=CK.STALE_S + 1)
+    assert CK.StepLock(str(tmp_path), "s").acquire().took_over.startswith("not touched")
+
+
+def test_lock_of_this_very_job_is_taken_over(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "21348862")
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "6")
+    _lock_of(tmp_path, "21348862_6", age=5)
+    assert "this job" in CK.StepLock(str(tmp_path), "s").acquire().took_over
+
+
+def test_step_killed_with_sigkill_does_not_block_its_resubmission(tmp_path, monkeypatch):
+    """The incident: a run of a step is killed hard (main.py too, so its lock stays); the run that is
+    submitted next asks Slurm, finds the old job gone, takes the lock over and runs the step."""
+    script = tmp_path / "fake.py"
+    script.write_text(FAKE)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "rc-e3-synth").write_text("99")  # the step runs until killed
+    driver = tmp_path / "drive.py"
+    driver.write_text(textwrap.dedent(f"""\
+        import sys
+        sys.path.insert(0, {EXP!r})
+        import common, main
+        common.environment = lambda: {{}}
+        sys.exit(main.main(["--out", {str(out)!r}, "--steps", "e3-synth"],
+                           steps={{"e3-synth": ([{str(script)!r}, "e3-synth"], "x")}}))
+    """))
+    env = dict(os.environ, SLURM_ARRAY_JOB_ID="21348862", SLURM_ARRAY_TASK_ID="6", SLURM_JOB_ID="21348869")
+    p = subprocess.Popen([sys.executable, str(driver)], env=env, start_new_session=True)
+    lock = out / "status" / "e3-synth.lock"
+    for _ in range(200):
+        if lock.exists() and (out / "calls.jsonl").exists():
+            break
+        time.sleep(0.05)
+    os.killpg(p.pid, signal.SIGKILL)  # main.py and the step, no clean-up
+    p.wait()
+    assert json.load(open(lock))["job"] == "21348862_6"  # left behind
+    (out / "rc-e3-synth").write_text("0")
+    _squeue(tmp_path, monkeypatch, "")  # Slurm: that job is gone
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "21348870")
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "6")
+    monkeypatch.setattr(common, "environment", lambda: {})
+    assert M.main(["--out", str(out), "--steps", "e3-synth", "--force"],
+                  steps={"e3-synth": ([str(script), "e3-synth"], "x")}) == 0
+    assert len((out / "calls.jsonl").read_text().splitlines()) == 2 and not lock.exists()
+    assert CK.load(str(out), "e3-synth")["returncode"] == 0
+
+
+def test_options_after_double_dash_reach_the_step(fake):
+    run, calls, out = fake
+    assert run("--steps", "s1", "--", "--budget", "3600") == 0
+    argv = json.loads((out / "calls.jsonl").read_text().splitlines()[-1])["argv"]
+    assert argv[-2:] == ["--budget", "3600"] and CK.load(str(out), "s1")["config"]["step_args"] == ["--budget", "3600"]
+    assert run("--steps", "s1", "--", "--budget", "3600") == 0      # the same options: done
+    assert run("--steps", "s1", "--", "--budget", "7200") == 0      # other options: runs again
+    assert run("--steps", "s1") == 0                                 # no options: the last run counts
+    assert calls() == ["s1", "s1"]
+
+
+def test_sinkhorn_rows_of_the_old_budget_run_again(tmp_path, monkeypatch):
+    import argparse
+    import e5_approx as E5
+    monkeypatch.setattr(common, "_TABLES", [])
+    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
+    t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.03, sample=558, timed=369))        # cut by the old budget
+    t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.1, sample=558, timed=558))         # complete
+    t.add(dict(graph="Squirrel", method="sinkhorn", reg=0.03, sample=500, timed=470, skipped_memory=30))  # new: done
+    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
+    a = argparse.Namespace()
+    assert not E5.sinkhorn_done(t, a, graph="Twitch-DE", method="sinkhorn", reg=0.03)
+    assert E5.sinkhorn_done(t, a, graph="Twitch-DE", method="sinkhorn", reg=0.1)
+    assert E5.sinkhorn_done(t, a, graph="Squirrel", method="sinkhorn", reg=0.03)
+
+
+def test_sinkhorn_rows_that_skipped_edges_for_memory_run_again_with_more(tmp_path, monkeypatch):
+    import argparse
+    import e5_approx as E5
+    monkeypatch.setattr(common, "_TABLES", [])
+    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
+    t.add(dict(graph="GitHub", method="pot", reg=0.0, sample=651, timed=650, skipped_memory=1))   # old cap: 5e7
+    t.add(dict(graph="Squirrel", method="pot", reg=0.0, sample=500, timed=500, skipped_memory=0))
+    t.add(dict(graph="Big", method="pot", reg=0.0, sample=10, timed=9, skipped_memory=1, max_pairs=7e8))
+    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
+    a = argparse.Namespace()
+    assert not E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="pot", reg=0.0)   # fits in this job now
+    assert E5.sinkhorn_done(t, a, 7e8, graph="Squirrel", method="pot", reg=0.0)
+    assert E5.sinkhorn_done(t, a, 7e8, graph="Big", method="pot", reg=0.0)          # no more memory than before
+    assert not E5.sinkhorn_done(t, a, 2e9, graph="Big", method="pot", reg=0.0)      # a job with more
