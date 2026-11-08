@@ -20,8 +20,11 @@ them we score
 Errors are reported on all edges and on hub edges (an endpoint of degree >= ``--hub``); every
 method gets the same number of threads (``--threads``) and is timed end to end (GRC includes its
 shortest paths and its process pool). GRC runs in its own environment (``--grc-python`` or
-$ORCUT_GRC_PYTHON). A GRC run has no time limit; it cannot be saved partway, so a run killed by the
-time or memory limit of its job is tried again only by a job with more time or memory.
+$ORCUT_GRC_PYTHON). A GRC run has no time limit. On graphs above ``--grc-chunk-above`` edges, and
+wherever one call did not finish before, it runs in contiguous chunks of edges of about
+``--grc-chunk`` seconds, each saved as soon as it is done (its time is then the sum over the chunks,
+in ``chunks`` of them); a single call killed by its job's memory limit is tried again only by a job
+with more memory.
 
 Part ``sinkhorn``: time-accuracy trade-off on a stratified sample of edges (bins of d_i + d_j), on
 the local problems at idleness 1/2: entropic OT at regularization ``--regs`` against the exact value,
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from fractions import Fraction
@@ -135,9 +139,20 @@ def part_whole(a):
             if meth not in grc_left:
                 continue
             extra = {}
+            state_dir = os.path.join(out_dir(a.out, "e5", "partial"), f"grc.{R.slug(name)}.{meth}")
             if grc_ok:
                 st, gave = grc_runs.resume((name, meth), "grc")
-                if st == "gave_up":  # killed by its job's time or memory limit: only a bigger job runs it again
+                prev = str((rows.get(graph=name, method=meth) or {}).get("status") or "")
+                # in saved chunks: a run that did not finish in one call before (a timeout, a method it
+                # skipped, killed by its job's time limit), one under way in chunks, or a large graph
+                chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or \
+                    prev in ("timeout", "skipped") or prev.startswith("did not finish") or \
+                    (st == "gave_up" and gave["status"].startswith("did not finish"))
+                if chunked:
+                    val, t, status, nch = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python, state_dir,
+                                                        chunk_s=a.grc_chunk, log=lambda msg: log(f"E5 {name:16s} {msg}"))
+                    extra = dict(chunks=nch)
+                elif st == "gave_up":  # killed by its job's memory limit: only a bigger job runs it again
                     val, t, status = None, float("nan"), gave["status"]
                     extra = {k: v for k, v in gave.items() if k != "status"}
                 else:
@@ -151,6 +166,8 @@ def part_whole(a):
                 np.save(os.path.join(cache, f"{R.slug(name)}.{meth}.npy"), val)
             rows.add(row)
             grc_runs.drop((name, meth))
+            if status == "ok":
+                shutil.rmtree(state_dir, ignore_errors=True)
             log(f"E5 {name:16s} {meth:12s} {status:8s} {t:9.1f}s "
                 + (f"MAE {row.get('mae', float('nan')):.2e} max {row.get('max_err', float('nan')):.3f} "
                    f"recall- {row.get('recall_neg', float('nan')):.3f}" if val is not None else ""))
@@ -287,6 +304,10 @@ def main():
     ap.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)))
     ap.add_argument("--hub", type=int, default=1000, help="hub edges: an endpoint of at least this degree")
     ap.add_argument("--grc-python", default=None, help="python of the GRC environment (default $ORCUT_GRC_PYTHON)")
+    ap.add_argument("--grc-chunk", type=float, default=3600.0, help="part whole: seconds per saved chunk of a long GRC run")
+    ap.add_argument("--grc-chunk-above", type=int, default=10**6,
+                    help="part whole: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
+                         "not finish before)")
     ap.add_argument("--regs", nargs="+", type=float, default=[1.0, 0.3, 0.1, 0.03, 0.01])
     ap.add_argument("--per-bin", type=int, default=50)
     ap.add_argument("--budget", type=float, default=None, help="ignored: part sinkhorn has no time budget any more")
