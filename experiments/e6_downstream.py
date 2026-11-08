@@ -15,6 +15,9 @@ exists), and the ``--remove`` most positively curved edges are deleted. We time 
 step (full and incremental) and the plans per iteration; for reference, GraphRicciCurvature's time
 for the curvature of all edges of the input graph (alpha = 0, its default method), a lower bound
 on the time of one iteration of the original implementation, which also extracts transport plans.
+Both are saved as they go: BORF after every iteration, and a GRC run that did not finish in one call
+before, or on a graph above ``--grc-chunk-above`` edges, in chunks of edges of about ``--grc-chunk``
+seconds (its time is then the sum over the chunks).
 
 Part ``community``: community detection by sequential deletion of the most negatively curved edge
 (Sia, Jonckheere and Bogdan, 2019): delete the edge of smallest curvature, update the curvature of
@@ -31,7 +34,9 @@ Usage: python e6_downstream.py --part borf|community [--graphs ...] [--threads 3
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
 import sys
 import time
 from fractions import Fraction
@@ -44,6 +49,7 @@ import baselines as B
 import datasets as D
 import dynamic as DY
 import registry as R
+import xio
 
 HALF = Fraction(1, 2)
 
@@ -70,15 +76,47 @@ def plan_argmax(cert):
     return best[1], best[2]
 
 
-def borf(g0, loops, n_add, n_remove, measure="nonlazy", incremental=True, check_every=0, threads=None):
-    """Run BORF; returns (final graph, per-iteration records)."""
+def _borf_save(ckpt, meta, g, kap, recs):
+    if ckpt:
+        xio.atomic_npz(ckpt, edges=g.edges, kap=kap, meta=np.array(json.dumps(dict(meta, recs=recs))))
+
+
+def _borf_load(ckpt, meta):
+    """(graph, curvature, records) saved after the last iteration done, or None."""
     import orcut
 
-    g = g0
-    t0 = time.perf_counter()
-    kap = orcut.curvature(g, measure, n_jobs=threads)
-    recs = [dict(iteration=-1, m=g.num_edges, time_curv_s=time.perf_counter() - t0, affected=g.num_edges)]
-    for it in range(loops):
+    if not (ckpt and os.path.exists(ckpt)):
+        return None
+    try:
+        z = np.load(ckpt)
+        saved = json.loads(str(z["meta"]))
+    except (OSError, ValueError, KeyError):
+        return None
+    recs = saved.pop("recs")
+    if saved != meta:
+        return None
+    return orcut.Graph.from_edges(z["edges"], meta["n"]), z["kap"], recs
+
+
+def borf(g0, loops, n_add, n_remove, measure="nonlazy", incremental=True, check_every=0, threads=None, ckpt=None):
+    """Run BORF; returns (final graph, per-iteration records). With ``ckpt`` (an .npz path), the graph
+    and curvature are saved after every iteration, and a run stopped in the middle resumes after the
+    last iteration done; ``time_iter_s`` records each iteration's time (checks excluded)."""
+    import orcut
+
+    meta = dict(n=int(g0.num_nodes), m=int(g0.num_edges), loops=int(loops), add=int(n_add), remove=int(n_remove),
+                measure=str(measure), incremental=bool(incremental))
+    got = _borf_load(ckpt, meta)
+    if got is not None:
+        g, kap, recs = got
+    else:
+        g = g0
+        t0 = time.perf_counter()
+        kap = orcut.curvature(g, measure, n_jobs=threads)
+        recs = [dict(iteration=-1, m=g.num_edges, time_curv_s=time.perf_counter() - t0, affected=g.num_edges)]
+        _borf_save(ckpt, meta, g, kap, recs)
+    for it in range(len(recs) - 1, loops):
+        t_it = time.perf_counter()
         order = np.argsort(kap, kind="stable")
         neg, pos = order[:n_add], order[::-1][:n_remove]
         t0 = time.perf_counter()
@@ -113,8 +151,10 @@ def borf(g0, loops, n_add, n_remove, measure="nonlazy", incremental=True, check_
             tc = time.perf_counter()
             rec["check_mismatch"] = int(np.sum(new_kap != orcut.curvature(g_new, measure, n_jobs=threads)))
             rec["time_check_s"] = time.perf_counter() - tc
+        rec["time_iter_s"] = time.perf_counter() - t_it - rec.get("time_check_s", 0.0)
         recs.append(rec)
         g, kap = g_new, new_kap
+        _borf_save(ckpt, meta, g, kap, recs)
     return g, recs
 
 
@@ -152,10 +192,10 @@ def part_borf(a):
         for backend, inc in (("orcut-full", False), ("orcut-incremental", True)):
             if rows.done(graph=name, backend=backend):
                 continue
-            t0 = time.perf_counter()
+            ckpt = os.path.join(out_dir(a.out, "e6", "partial"), f"borf.{R.slug(name)}.{backend}.npz")
             gf, recs = borf(g, a.loops, a.add, a.remove, incremental=inc, check_every=a.check_every if inc else 0,
-                            threads=a.threads)
-            total = time.perf_counter() - t0 - sum(r.get("time_check_s", 0.0) for r in recs)
+                            threads=a.threads, ckpt=ckpt)
+            total = recs[0]["time_curv_s"] + sum(r["time_iter_s"] for r in recs[1:])  # also across a restart
             finals[backend] = gf
             for r in recs:
                 it_rows.add(dict(graph=name, backend=backend, **r))
@@ -167,6 +207,10 @@ def part_borf(a):
                        added_total=int(sum(r["added"] for r in loop_recs)), m_final=gf.num_edges,
                        check_mismatch=int(sum(r.get("check_mismatch", 0) for r in loop_recs)))
             rows.add(row)
+            try:
+                os.remove(ckpt)
+            except OSError:
+                pass
             log(f"E6B {name:16s} {backend:18s} total {total:8.2f}s curvature/iter {row['curv_per_iter_s']:.3f}s "
                 f"plans/iter {row['plan_per_iter_s']:.3f}s affected {row['affected_share']:.3f}")
         if len(finals) == 2:
@@ -174,9 +218,20 @@ def part_borf(a):
             rows.add(dict(rows.rows[-1], same_final_graph=bool(same)))
         if grc_left:
             extra = {}
+            state_dir = os.path.join(out_dir(a.out, "e6", "partial"), f"grc.{R.slug(name)}")
             if grc_ok:
                 st, gave = grc_runs.resume((name,), "grc")
-                if st == "gave_up":  # killed by its job's time or memory limit: only a bigger job runs it again
+                prev = str(r.get("status") or "") if r is not None else ""
+                # in saved chunks: a run that did not finish in one call before (a timeout, killed by its
+                # job's time limit), one under way in chunks, or a large graph
+                chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or prev == "timeout" or \
+                    prev.startswith("did not finish") or (st == "gave_up" and gave["status"].startswith("did not finish"))
+                if chunked:
+                    val, t, status, nch = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python,
+                                                        state_dir, chunk_s=a.grc_chunk,
+                                                        log=lambda msg: log(f"E6B {name:16s} {msg}"))
+                    extra = dict(chunks=nch)
+                elif st == "gave_up":  # killed by its job's memory limit: only a bigger job runs it again
                     val, t, status = None, float("nan"), gave["status"]
                     extra = {k: v for k, v in gave.items() if k != "status"}
                 else:
@@ -191,6 +246,8 @@ def part_borf(a):
                 row["max_diff_vs_exact"] = float(np.max(np.abs(val - orcut.curvature(g, "nonlazy", n_jobs=a.threads))))
             rows.add(row)
             grc_runs.drop((name,))
+            if status == "ok":
+                shutil.rmtree(state_dir, ignore_errors=True)
             log(f"E6B {name:16s} grc                {status:8s} curvature of all edges {t:9.2f}s")
     if kept:
         log(f"E6 {kept} GRC rows left as unavailable: GraphRicciCurvature is not available in this run")
@@ -313,6 +370,10 @@ def main():
     ap.add_argument("--check-every", type=int, default=None,
                     help="compare with a full recomputation every k iterations (default: borf 5, community 500)")
     ap.add_argument("--grc-python", default=None)
+    ap.add_argument("--grc-chunk", type=float, default=3600.0, help="part borf: seconds per saved chunk of a long GRC run")
+    ap.add_argument("--grc-chunk-above", type=int, default=10**6,
+                    help="part borf: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
+                         "not finish before)")
     ap.add_argument("--sizes", nargs="+", type=int, default=[1000, 5000])
     ap.add_argument("--mus", nargs="+", type=float, default=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
     ap.add_argument("--seeds", type=int, default=5)
