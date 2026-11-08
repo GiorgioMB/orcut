@@ -366,6 +366,44 @@ def grc_python(explicit: Optional[str] = None) -> Optional[str]:
     return p if p and os.path.exists(p) else None
 
 
+def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: Optional[str], state_dir: str,
+                chunk_s: float = 3600.0, log=None):
+    """GraphRicciCurvature on all edges of ``g`` in contiguous chunks of edges (``grc`` with ``ids``),
+    each saved to ``state_dir`` as soon as it is computed, so that a run stopped in the middle (time
+    limit, node failure) resumes at the next chunk. The first chunk is small (1% of the edges, at
+    least 500); the next are sized from the time per edge so far to take about ``chunk_s`` seconds
+    (at least 500 edges: every call pays GRC's start-up).
+    Returns (values aligned with g.edges, GRC's seconds summed over the chunks, status, chunks); on
+    an error the chunks done so far stay saved."""
+    import xio
+
+    os.makedirs(state_dir, exist_ok=True)
+    path = os.path.join(state_dir, "state.json")
+    m = int(g.num_edges)
+    key = dict(method=method, alpha=float(alpha), nbr_topk=int(nbr_topk), n=int(g.num_nodes), m=m)
+    state = xio.read_json(path, default=None)
+    if not (isinstance(state, dict) and state.get("key") == key):
+        state = dict(key=key, chunks=[])  # [first edge, last edge + 1, seconds]
+    done = max((c[1] for c in state["chunks"]), default=0)
+    while done < m:
+        spent = sum(c[2] for c in state["chunks"])
+        size = max(500, m // 100) if done == 0 else max(500, int(chunk_s * done / max(spent, 1e-9)))
+        lo, hi = done, min(m, done + max(1, size))
+        val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64))
+        if status != "ok":
+            return None, float("nan"), status, len(state["chunks"])
+        np.save(os.path.join(state_dir, f"{lo}.npy"), val)
+        state["chunks"].append([lo, hi, float(t)])
+        xio.atomic_json(state, path)
+        done = hi
+        if log is not None:
+            spent += t
+            log(f"GRC {method} chunk {len(state['chunks'])}: edges {lo:,}-{hi:,} of {m:,} in {t:.0f}s; "
+                f"about {spent / hi * (m - hi) / 3600:.1f} h left")
+    vals = np.concatenate([np.load(os.path.join(state_dir, f"{lo}.npy")) for lo, _, _ in sorted(state["chunks"])])
+    return vals, float(sum(c[2] for c in state["chunks"])), "ok", len(state["chunks"])
+
+
 def grc_atd_need(n: int) -> float:
     """Bytes GraphRicciCurvature needs for its all-pairs distances: it builds the n x n table from
     n^2 Python floats before turning it into an array, about 40 n^2 bytes at the peak."""
