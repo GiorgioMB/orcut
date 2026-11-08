@@ -4,6 +4,7 @@ with more memory or more time tries it again."""
 import os
 import sys
 
+import numpy as np
 import pytest
 
 EXP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "experiments")
@@ -176,3 +177,62 @@ def test_grc_atd_gets_all_pairs_when_they_fit(tmp_path, monkeypatch):
     monkeypatch.setattr(PT, "memory_available", lambda: 1e3)
     _, _, st = B.grc(g, "ATD", 0.5, 3000, 1, str(py), timeout=60)
     assert st.startswith("skipped: needs") and "ATD" in st
+
+
+def test_highs_skipped_for_its_lp_size_runs_when_the_limit_is_raised(tmp_path, monkeypatch):
+    import e2_per_edge as E2
+    monkeypatch.setattr(common, "_TABLES", [])
+    t = common.Rows(str(tmp_path / "c.csv"), ["sweep", "regime", "s", "seed"])
+    t.add(dict(sweep="sym", regime="tree", s=8192, seed=0, ours_s=0.1, highs_s=float("nan"), highs_lp_vars=8194 ** 2,
+               highs_status=f"skipped: LP of {8194 ** 2:,} variables, above --highs-max-vars (16,793,604)"))
+    t = common.Rows(str(tmp_path / "c.csv"), ["sweep", "regime", "s", "seed"])
+    k = dict(sweep="sym", regime="tree", s=8192, seed=0)
+    assert E2._row_left(t, ["ours", "highs"], {"highs": 4098.0 ** 2}, **k)[0] is None    # the same limit: done
+    assert E2._row_left(t, ["ours", "highs"], {"highs": 8194.0 ** 2}, **k)[0] == ["highs"]  # raised: HiGHS only
+
+
+def test_grc_in_saved_chunks_resumes_after_a_kill(tmp_path, monkeypatch):
+    import baselines as B
+    import datasets as D
+    g = D.to_graph(*D.synthetic("ER", 2000, 8, 0))
+    calls = []
+
+    def fake(g_, method, alpha, topk, proc, python, ids=None, **kw):  # GRC: value = edge id, 2 s per call
+        calls.append((int(ids[0]), int(ids[-1]) + 1))
+        if len(calls) == 3:
+            raise KeyboardInterrupt  # the job is killed during the third chunk
+        return ids.astype(float), 2.0, "ok"
+
+    monkeypatch.setattr(B, "grc", fake)
+    d = str(tmp_path / "state")
+    with pytest.raises(KeyboardInterrupt):
+        B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
+    n = len(calls)
+    vals, t, st, nch = B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
+    assert st == "ok" and np.array_equal(vals, np.arange(g.num_edges, dtype=float))
+    assert calls[n][0] == calls[n - 1][0]  # it restarts the killed chunk, not the two saved before it
+    assert t == 2.0 * nch and nch == len(calls) - 1
+
+
+def test_borf_resumes_after_its_last_saved_iteration(tmp_path, monkeypatch):
+    import datasets as D
+    import e6_downstream as E6
+    import orcut
+    g = D.to_graph(*D.synthetic("BA", 300, 4, 0))
+    ref, _ = E6.borf(g, 4, 5, 3, threads=1)
+    ck = str(tmp_path / "b.npz")
+    real = orcut.certify
+    n = {"calls": 0}
+
+    def dies(*args, **kw):
+        n["calls"] += 1
+        if n["calls"] > 12:  # killed during the third iteration (5 plans per iteration)
+            raise KeyboardInterrupt
+        return real(*args, **kw)
+
+    monkeypatch.setattr(orcut, "certify", dies)
+    with pytest.raises(KeyboardInterrupt):
+        E6.borf(g, 4, 5, 3, threads=1, ckpt=ck)
+    monkeypatch.setattr(orcut, "certify", real)
+    got, recs = E6.borf(g, 4, 5, 3, threads=1, ckpt=ck)
+    assert np.array_equal(got.edges, ref.edges) and [r["iteration"] for r in recs] == [-1, 0, 1, 2, 3]
