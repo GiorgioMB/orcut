@@ -764,7 +764,10 @@ def block_e6(R, O: Out, figdir: str):
             aff = get("orcut-incremental", "affected_share")
             m = get("orcut-full", "m")
             status = str(s_.loc["grc", "status"]) if "grc" in s_.index and "status" in s_ else "ok"
-            lines.append(" & ".join([tex_name(gname), f_num(m), f_time(grc) if status == "ok" else r"\textit{" + status + "}",
+            lower = get("grc", "curv_lower_s")  # a partial reference: GRC's time so far, a lower bound
+            grc_cell = f_time(grc) if status == "ok" else (r"$>$" + f_time(lower) if status == "partial" and
+                                                          math.isfinite(lower) else r"\textit{" + status + "}")
+            lines.append(" & ".join([tex_name(gname), f_num(m), grc_cell,
                                      f_time(full), f_time(inc), f_pct(aff, 0), f_time(plan)]) + r" \\")
             if math.isfinite(grc) and math.isfinite(full) and full > 0:
                 sp_grc.append(grc / full)
