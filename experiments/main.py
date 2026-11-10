@@ -351,8 +351,9 @@ def _command(step, a, steps):
 
 
 # Steps that can run in several jobs at once (--worker): they claim each unit of work (e5-whole: each
-# GRC run) before computing it, and their tables are written under a lock (common.Rows.add).
-WORKER_STEPS = {"e5-whole"}
+# GRC run; e3: each chunk of a long solve, each other row) before computing it, and their tables are
+# written under a lock (common.Rows.add).
+WORKER_STEPS = {"e5-whole", "e3-real", "e3-synth"}  # e3: the chunks of a long row, and the rows themselves
 
 # Steps whose rules changed so that a completed run left rows the step computes now: a record
 # with an older (or no) number is not done, and the step runs again (for those rows only).
