@@ -112,8 +112,31 @@ class Rows:
         return r is not None and row_ok(r)
 
     def add(self, row: Dict) -> None:
-        self.rows = [r for r in self.rows if self._k(r) != self._k(row)] + [row]
-        write_csv(self.rows, self.path)
+        """Add (or replace) a row. The table is read again under a short lock first, so that rows
+        added meanwhile by other processes (parallel workers of a step) are kept."""
+        with xio.locked(self.path):
+            merged = {self._k(r): r for r in read_csv(self.path)}
+            for r in self.rows:  # rows of this process not on disk (none, unless the table was moved)
+                merged.setdefault(self._k(r), r)
+            merged.pop(self._k(row), None)
+            merged[self._k(row)] = row  # last: rows[-1] is the row just added
+            self.rows = list(merged.values())
+            write_csv(self.rows, self.path)
+
+    def refresh(self) -> None:
+        """Read the table again (rows added by other processes since)."""
+        on_disk = read_csv(self.path)
+        if on_disk or not self.rows:
+            self.rows = on_disk
+
+
+_INCOMPLETE: List[str] = []  # work this process left to others that is not done yet (parallel workers)
+
+
+def mark_incomplete(what: str) -> None:
+    """Note work that this process left to another worker and that is not done when it ends:
+    finish() then returns EXIT_INCOMPLETE, so that main.py does not record the step as done."""
+    _INCOMPLETE.append(what)
 
 
 def finish() -> int:
@@ -121,8 +144,11 @@ def finish() -> int:
     EXIT_INCOMPLETE when rows of its tables record a failure. main.py then does not record the
     step as done, and when the step runs again it computes these rows again (and only these)."""
     bad = [(t, r) for t in _TABLES for r in t.rows if row_failed(r)]
+    if _INCOMPLETE:
+        log(f"{len(_INCOMPLETE)} part(s) were left to other workers and are not done yet: "
+            + ", ".join(_INCOMPLETE[:10]))
     if not bad:
-        return 0
+        return EXIT_INCOMPLETE if _INCOMPLETE else 0
     log(f"{len(bad)} row(s) ended in an error; they are computed again when this step runs again:")
     for t, r in bad[:20]:
         key = ", ".join(f"{k}={r.get(k)}" for k in t.key)
