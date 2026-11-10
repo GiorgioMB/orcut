@@ -17,7 +17,10 @@ for the curvature of all edges of the input graph (alpha = 0, its default method
 on the time of one iteration of the original implementation, which also extracts transport plans.
 Both are saved as they go: BORF after every iteration, and a GRC run that did not finish in one call
 before, or on a graph above ``--grc-chunk-above`` edges, in chunks of edges of about ``--grc-chunk``
-seconds (its time is then the sum over the chunks).
+seconds (its time is then the sum over the chunks). The GRC reference gets ``--grc-budget`` seconds
+(24 h) per graph: if it runs out, the row is ``partial``, with the edges done, the time spent (a lower
+bound on GRC's time per iteration, ``curv_lower_s``) and the extrapolation to all edges
+(``curv_est_s``); a run with a larger budget continues from the saved chunks.
 
 Part ``community``: community detection by sequential deletion of the most negatively curved edge
 (Sia, Jonckheere and Bogdan, 2019): delete the edge of smallest curvature, update the curvature of
@@ -180,6 +183,9 @@ def part_borf(a):
         # a timeout of the old 2-hour limit runs now (there is no limit any more); so does a run given up
         # by a job whose time or memory this one exceeds
         grc_left = grc_left or (r is not None and grc_ok and (str(r.get("status") or "") == "timeout" or PT.retry_now(r)))
+        # a partial reference (its budget ran out) continues from its chunks when the budget is raised
+        grc_left = grc_left or (r is not None and grc_ok and str(r.get("status") or "") == "partial" and
+                                (a.grc_budget is None or a.grc_budget > 1.01 * common.num(r, "grc_budget_s")))
         if grc_left and r is not None:
             log(f"E6 {name:16s} grc computed again (was: {str(r.get('status'))[:60]})")
         kept += int(not grc_left and r is not None and not rows.done(graph=name, backend="grc"))
@@ -224,13 +230,16 @@ def part_borf(a):
                 prev = str(r.get("status") or "") if r is not None else ""
                 # in saved chunks: a run that did not finish in one call before (a timeout, killed by its
                 # job's time limit), one under way in chunks, or a large graph
-                chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or prev == "timeout" or \
-                    prev.startswith("did not finish") or (st == "gave_up" and gave["status"].startswith("did not finish"))
+                chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or prev in ("timeout", "partial") \
+                    or prev.startswith("did not finish") or (st == "gave_up" and gave["status"].startswith("did not finish"))
                 if chunked:
-                    val, t, status, nch = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python,
-                                                        state_dir, chunk_s=a.grc_chunk,
-                                                        log=lambda msg: log(f"E6B {name:16s} {msg}"))
-                    extra = dict(chunks=nch)
+                    val, t, status, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python,
+                                                               state_dir, chunk_s=a.grc_chunk, budget_s=a.grc_budget,
+                                                               log=lambda msg: log(f"E6B {name:16s} {msg}"))
+                    extra = dict(chunks=nch, grc_budget_s=a.grc_budget)
+                    if status == "partial":  # the budget ran out: GRC's time so far is a lower bound
+                        extra.update(grc_edges_done=ndone, curv_lower_s=t, curv_est_s=t * g.num_edges / max(1, ndone))
+                        val, t = None, float("nan")
                 elif st == "gave_up":  # killed by its job's memory limit: only a bigger job runs it again
                     val, t, status = None, float("nan"), gave["status"]
                     extra = {k: v for k, v in gave.items() if k != "status"}
@@ -248,7 +257,12 @@ def part_borf(a):
             grc_runs.drop((name,))
             if status == "ok":
                 shutil.rmtree(state_dir, ignore_errors=True)
-            log(f"E6B {name:16s} grc                {status:8s} curvature of all edges {t:9.2f}s")
+            if status == "partial":
+                log(f"E6B {name:16s} grc                partial  {row['grc_edges_done']:,} of {g.num_edges:,} edges in "
+                    f"{row['curv_lower_s'] / 3600:.1f} h (the budget): more than that per iteration, about "
+                    f"{row['curv_est_s'] / 3600:.0f} h extrapolated")
+            else:
+                log(f"E6B {name:16s} grc                {status:8s} curvature of all edges {t:9.2f}s")
     if kept:
         log(f"E6 {kept} GRC rows left as unavailable: GraphRicciCurvature is not available in this run")
 
@@ -371,6 +385,9 @@ def main():
                     help="compare with a full recomputation every k iterations (default: borf 5, community 500)")
     ap.add_argument("--grc-python", default=None)
     ap.add_argument("--grc-chunk", type=float, default=3600.0, help="part borf: seconds per saved chunk of a long GRC run")
+    ap.add_argument("--grc-budget", type=float, default=86400.0,
+                    help="part borf: seconds of GRC time per graph for the reference; when it runs out, the row is "
+                         "'partial' with the time spent (a lower bound) and an extrapolation (0: no budget)")
     ap.add_argument("--grc-chunk-above", type=int, default=10**6,
                     help="part borf: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
                          "not finish before)")
@@ -385,6 +402,7 @@ def main():
     a = ap.parse_args()
     if a.check_every is None:
         a.check_every = 5 if a.part == "borf" else 500
+    a.grc_budget = a.grc_budget or None  # 0: no budget
     if a.quick:
         a.loops, a.check_every = 4, (1 if a.part == "borf" else 100)
     common.warm_jit()
