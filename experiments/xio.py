@@ -17,12 +17,15 @@ wall-time limit) loses at most the unit of work that was running:
 """
 from __future__ import annotations
 
+import contextlib
 import glob
 import hashlib
 import json
 import os
 import pickle
+import random
 import socket
+import time
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -52,6 +55,37 @@ def _prepare(path: str) -> str:
     d = os.path.dirname(os.path.abspath(path))
     os.makedirs(d, exist_ok=True)
     return tmp_path(path)
+
+
+@contextlib.contextmanager
+def locked(path: str, stale_s: float = 300.0, wait_s: float = 900.0):
+    """Hold ``<path>.lock`` while the block runs, so that processes that read, change and rewrite
+    the same file (the result tables of parallel workers) take turns. Meant for writes of a few
+    milliseconds: a lock older than ``stale_s`` was left by a killed process and is removed."""
+    lock = path + ".lock"
+    os.makedirs(os.path.dirname(os.path.abspath(lock)), exist_ok=True)
+    t0 = time.time()
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(lock) > stale_s:
+                    os.remove(lock)
+                    continue
+            except OSError:
+                continue
+            if time.time() - t0 > wait_s:
+                raise TimeoutError(f"{lock} has been held for more than {wait_s:.0f} s")
+            time.sleep(0.05 + 0.1 * random.random())
+    try:
+        yield
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
 
 
 def atomic_write_bytes(data: bytes, path: str) -> None:
