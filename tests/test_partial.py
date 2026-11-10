@@ -249,3 +249,23 @@ def test_grc_reference_stops_at_its_budget_and_continues_with_a_larger_one(tmp_p
     assert np.isnan(vals[ndone:]).all() and np.array_equal(vals[:ndone], np.arange(ndone, dtype=float))
     vals, t, st, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, 1, "py", d, chunk_s=1e6, budget_s=1e6)
     assert st == "ok" and ndone == g.num_edges and nch == 4  # the three saved chunks, and one for the rest
+
+
+def test_workers_share_the_chunks_of_one_row(tmp_path):
+    import checkpoint as CK
+    import datasets as D
+    import e3_scale as E3
+    g = D.to_graph(*D.synthetic("BA", 400, 6, 0))
+    ck, claims = str(tmp_path / "row.json"), str(tmp_path / "claims")
+    other = CK.StepLock(claims, "row.c2").acquire()  # another worker is computing chunk 2
+    mine = []
+    assert E3.solve_chunked(g, "lazy", 1, ck, g.num_edges // 5, "G", after_chunk=mine.append, claims=claims) is None
+    assert 2 not in mine and len(mine) >= 4  # all the others: the row is not written by this worker
+    other.release()  # ... which finished chunk 2 and then finds the row complete
+    theirs = []
+    state, tot, finish = E3.solve_chunked(g, "lazy", 1, ck, g.num_edges // 5, "G", after_chunk=theirs.append,
+                                          claims=claims)
+    assert theirs == [2] and finish is not None and tot["edges"] == g.num_edges
+    with pytest.raises(CK.Busy):  # nobody else writes the row meanwhile
+        CK.StepLock(claims, "row.row").acquire()
+    finish.release()
