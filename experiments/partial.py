@@ -109,13 +109,23 @@ class Parts:
         self.path = path
         data = xio.read_json(path, default=None)
         self.data: Dict[str, Dict[str, dict]] = data if isinstance(data, dict) else {}
+        self._touched = set()  # the row keys this process changed (merged into the file on save)
 
     @staticmethod
     def key(rowkey) -> str:
         return "|".join(str(x) for x in rowkey)
 
     def _save(self) -> None:
-        xio.atomic_json(self.data, self.path)
+        with xio.locked(self.path):  # parallel workers share the file: keep their rows
+            disk = xio.read_json(self.path, default=None)
+            disk = disk if isinstance(disk, dict) else {}
+            for k in self._touched:
+                if k in self.data:
+                    disk[k] = self.data[k]
+                else:
+                    disk.pop(k, None)
+            self.data = disk
+            xio.atomic_json(self.data, self.path)
 
     def resume(self, rowkey, part) -> Tuple[str, Optional[dict]]:
         """("todo", None), ("done", result), or ("gave_up", fields for the row: status and the limits
@@ -143,6 +153,7 @@ class Parts:
         return "todo", None
 
     def begin(self, rowkey, part) -> None:
+        self._touched.add(self.key(rowkey))
         e = self.data.setdefault(self.key(rowkey), {}).setdefault(part, {"attempts": []})
         e["state"] = "running"
         e.setdefault("attempts", []).append(dict(slurm_job=os.environ.get("SLURM_JOB_ID"), host=socket.gethostname(),
@@ -150,12 +161,14 @@ class Parts:
         self._save()
 
     def finish(self, rowkey, part, result: dict) -> None:
+        self._touched.add(self.key(rowkey))
         e = self.data.setdefault(self.key(rowkey), {}).setdefault(part, {"attempts": []})
         e.update(state="done", result=result)
         self._save()
 
     def drop(self, rowkey) -> None:
         if self.data.pop(self.key(rowkey), None) is not None:
+            self._touched.add(self.key(rowkey))
             self._save()
 
 
