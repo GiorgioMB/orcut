@@ -24,7 +24,8 @@ $ORCUT_GRC_PYTHON). A GRC run has no time limit. On graphs above ``--grc-chunk-a
 wherever one call did not finish before, it runs in contiguous chunks of edges of about
 ``--grc-chunk`` seconds, each saved as soon as it is done (its time is then the sum over the chunks,
 in ``chunks`` of them); a single call killed by its job's memory limit is tried again only by a job
-with more memory.
+with more memory. Several jobs can run this part at once (``main.py --worker K``): each GRC run is
+claimed by one of them, the others move on to the next.
 
 Part ``sinkhorn``: time-accuracy trade-off on a stratified sample of edges (bins of d_i + d_j), on
 the local problems at idleness 1/2: entropic OT at regularization ``--regs`` against the exact value,
@@ -47,6 +48,7 @@ import numpy as np
 import common
 from common import Rows, agreement, log, out_dir
 import baselines as B
+import checkpoint as CK
 import registry as R
 import xio
 
@@ -67,6 +69,7 @@ def part_whole(a):
 
     grc_ok = B.grc_python(a.grc_python) is not None
     grc_runs = PT.Parts(os.path.join(out_dir(a.out, "e5", "partial"), "grc.json"))  # the GRC runs under way
+    busy = []  # GRC runs being computed by other workers (main.py --worker)
     kept = 0  # GRC rows left as unavailable because GRC is not available in this run
     log(f"E5 GraphRicciCurvature: {B.grc_python(a.grc_python)}" if grc_ok else
         "E5 GraphRicciCurvature unavailable: its rows are recorded as unavailable (see main.py's log)")
@@ -141,6 +144,19 @@ def part_whole(a):
         for meth, grc_method, topk in GRC_METHODS:
             if meth not in grc_left:
                 continue
+            claim = None
+            if grc_ok:  # several workers may run this step: each GRC run is claimed by one of them
+                claim = CK.StepLock(out_dir(a.out, "e5", "partial"), f"grc.{R.slug(name)}.{meth}")
+                try:
+                    claim.acquire()
+                except CK.Busy as ex:
+                    log(f"E5 {name:16s} {meth:12s} left to the job computing it ({str(ex).split(';')[0]})")
+                    busy.append((name, meth))
+                    continue
+                rows.refresh()
+                if str((rows.get(graph=name, method=meth) or {}).get("status") or "") == "ok":
+                    claim.release()  # another worker finished it meanwhile
+                    continue
             extra = {}
             state_dir = os.path.join(out_dir(a.out, "e5", "partial"), f"grc.{R.slug(name)}.{meth}")
             if grc_ok:
@@ -176,6 +192,8 @@ def part_whole(a):
             grc_runs.drop((name, meth))
             if status == "ok":
                 shutil.rmtree(state_dir, ignore_errors=True)
+            if claim is not None:
+                claim.release()
             log(f"E5 {name:16s} {meth:12s} {status:8s} {t:9.1f}s "
                 + (f"MAE {row.get('mae', float('nan')):.2e} max {row.get('max_err', float('nan')):.3f} "
                    f"recall- {row.get('recall_neg', float('nan')):.3f}" if val is not None else ""))
@@ -183,6 +201,10 @@ def part_whole(a):
             log(f"E5 {name:16s} orcut idle 1/2 {t_half:.2f}s, non-lazy {t_zero:.2f}s ({a.threads} threads)")
     if kept:
         log(f"E5 {kept} GRC rows left as unavailable: GraphRicciCurvature is not available in this run")
+    rows.refresh()
+    for name, meth in busy:  # left to other workers: the step is done only once they are
+        if str((rows.get(graph=name, method=meth) or {}).get("status") or "") not in ("ok", "partial"):
+            common.mark_incomplete(f"{name} {meth}")
 
 
 SINK_BYTES = 80.0  # bytes per entry of a dense local problem for POT or Sinkhorn (distances, kernel, plan), rounded up
@@ -196,10 +218,18 @@ def sinkhorn_cap():
     return max(5e7, (PT.memory_available() or 0.0) / SINK_BYTES)
 
 
+def method_limit(meth, cap, a):
+    """Largest dense local problem (entries) given to ``meth``: what fits in memory for POT; for
+    Sinkhorn also at most ``--sinkhorn-max-pairs`` (5 x 10^7): below reg 0.1 it runs in the log domain,
+    with up to 10^5 passes over the whole problem, which on larger ones takes weeks per edge."""
+    return cap if meth != "sinkhorn" else min(cap, getattr(a, "sinkhorn_max_pairs", 5e7) or 5e7)
+
+
 def sinkhorn_done(rows, a, cap=None, **key):
     """The row is in the table, is not one of the earlier versions' budget (fewer edges timed than
-    sampled, and no count of the edges skipped for memory), and did not skip edges for memory that
-    this job can hold (``cap``; rows that do not record theirs had 5 x 10^7)."""
+    sampled, and no count of the edges skipped), its time could be estimated, and it did not skip
+    edges that this job's limit admits (``cap``, through method_limit; rows that do not record their
+    limit had 5 x 10^7)."""
     if not rows.done(**key):
         return False
     r = rows.get(**key)
@@ -207,10 +237,25 @@ def sinkhorn_done(rows, a, cap=None, **key):
     if skipped != skipped:
         return common.num(r, "timed") >= common.num(r, "sample")
     if skipped > 0:
+        t = common.num(r, "time_edge_weighted_s")
+        if t != t and str(r.get("untimed_share") or "") == "":
+            return False  # an earlier row whose skipped edges left a bin without a time: estimated over the others now
         had = common.num(r, "max_pairs")
         had = 5e7 if had != had else had
-        return not (cap if cap is not None else sinkhorn_cap()) > 1.01 * had
+        lim = method_limit(key.get("method"), cap if cap is not None else sinkhorn_cap(), a)
+        return not lim > 1.01 * had
     return True
+
+
+def _estimate_covered(strata, times, m):
+    """(seconds for all m edges, share of the edges in bins without any timed edge): the mean time per
+    edge over the bins that have timed edges, weighted by their counts, times m. NaN if no bin has one."""
+    tot, covered = 0.0, 0
+    for (_, _, c), t in zip(strata, times):
+        if np.isfinite(t).any():
+            tot += c * float(np.nanmean(t))
+            covered += c
+    return (tot / covered * m if covered else float("nan")), 1.0 - covered / m
 
 
 def part_sinkhorn(a):
@@ -219,9 +264,11 @@ def part_sinkhorn(a):
     counts (what the method would cost, and how wrong it would be, on average over all edges).
     Every sampled edge is timed, however long it takes; each is saved as soon as it is
     (<out>/e5/partial/), so a run stopped in the middle of a row resumes at the next edges. Edges
-    whose dense local problem does not fit in the job's memory (``sinkhorn_cap``, or ``--max-pairs``)
-    are counted in skipped_memory; the saved times are kept (<name>.done.json), so that a job with more
-    memory computes those edges only."""
+    whose dense local problem does not fit in the job's memory (``sinkhorn_cap``, or ``--max-pairs``),
+    or for Sinkhorn has more than ``--sinkhorn-max-pairs`` entries, are counted in skipped_memory; the
+    time is estimated over the bins with timed edges (untimed_share: the share of the edges in bins
+    without one), and the saved times are kept (<name>.done.json), so that a larger limit computes
+    the skipped edges only. A long row logs its progress every 10 minutes."""
     import numba
     import orcut
 
@@ -239,10 +286,12 @@ def part_sinkhorn(a):
         exact = [orcut.curvature(g, HALF, edges=s, n_jobs=1) for _, s, _ in strata]
         cnt = np.array([c for _, _, c in strata], float)
         hubs = [np.maximum(g.deg[g.edges[s, 0]], g.deg[g.edges[s, 1]]) >= a.hub for _, s, _ in strata]
-        too_big = [(g.deg[g.edges[s, 0]] + 1.0) * (g.deg[g.edges[s, 1]] + 1.0) > max_pairs for _, s, _ in strata]
+        pairs = [(g.deg[g.edges[s, 0]] + 1.0) * (g.deg[g.edges[s, 1]] + 1.0) for _, s, _ in strata]
         for meth, reg in methods:
             if sinkhorn_done(rows, a, cap, graph=name, method=meth, reg=reg):
                 continue
+            max_pairs = method_limit(meth, cap, a)
+            too_big = [p > max_pairs for p in pairs]
             r0 = rows.get(graph=name, method=meth, reg=reg)
             if r0 is not None:
                 why = (f"{r0.get('skipped_memory')} edges were too large for the memory of the job that ran it"
@@ -264,6 +313,17 @@ def part_sinkhorn(a):
                 del done[e]
             if fit_now:
                 log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} {len(fit_now)} edges skipped for memory before fit now")
+            n_all, n_big = len(sample_ids), int(sum(int(b.sum()) for b in too_big)) if meth != "orcut" else 0
+
+            def left_to_time():  # sampled edges neither saved nor too large
+                return sum(1 for (_, s_, _), big_ in zip(strata, too_big) for e, b in zip(s_, big_)
+                           if not (b and meth != "orcut") and str(int(e)) not in done)
+
+            n_left = left_to_time()
+            log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} timing {n_left} edges"
+                + (f" ({n_all - n_left - n_big} saved before)" if n_all - n_left - n_big > 0 else "")
+                + (f", {n_big} too large" if n_big else ""))
+            t_row, t_seen, n_row = time.perf_counter(), time.perf_counter(), 0
             for (bn, s, c), ex, big in zip(strata, exact, too_big):
                 if meth == "orcut":
                     if not all(str(int(e)) in done for e in s):
@@ -279,6 +339,13 @@ def part_sinkhorn(a):
                                              reps=1, reg=reg or None, times=t, max_pairs=max_pairs)
                     done.update({str(int(s[k])): [float(x), float(abs(y - ex[k]))] for k, x, y in zip(ks, t, v)})
                     xio.atomic_json(saved, ck)
+                    n_row += len(ks)
+                    if time.perf_counter() - t_seen > 600:  # a line every 10 minutes inside a long row
+                        t_seen = time.perf_counter()
+                        left = left_to_time()
+                        el = t_seen - t_row
+                        log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} {len(done)}/{n_all} edges, "
+                            f"about {el / max(1, n_row) * left / 3600:.1f} h left at this pace")
             times = [np.array([done[str(int(e))][0] for e in s], float) for _, s, _ in strata]
             errs = [np.array([done[str(int(e))][1] for e in s], float) for _, s, _ in strata]
             ok_bins = np.array([np.isfinite(e).any() for e in errs])
@@ -289,7 +356,8 @@ def part_sinkhorn(a):
             row = dict(graph=name, method=meth, reg=reg, m=g.num_edges, sample=int(sum(len(s) for _, s, _ in strata)),
                        timed=int(np.isfinite(all_err).sum()), skipped_memory=skipped, max_pairs=max_pairs,
                        bins_complete=int(ok_bins.sum()), bins=len(strata),
-                       est_total_1thread_s=common.estimate_total(strata, times),
+                       est_total_1thread_s=_estimate_covered(strata, times, g.num_edges)[0],
+                       untimed_share=_estimate_covered(strata, times, g.num_edges)[1],
                        mae_weighted=float(np.sum(cnt[ok_bins] * mean_err_bin[ok_bins]) / np.sum(cnt[ok_bins])),
                        max_err=float(np.nanmax(all_err)) if np.isfinite(all_err).any() else float("nan"),
                        hub_mae=float(np.nanmean(hub_err)) if np.isfinite(hub_err).any() else float("nan"))
@@ -302,7 +370,7 @@ def part_sinkhorn(a):
                 pass
             log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} {1e6 * row['time_edge_weighted_s']:10.1f}us/edge "
                 f"MAE {row['mae_weighted']:.2e} max {row['max_err']:.3f} ({row['timed']}/{row['sample']} timed"
-                + (f", {skipped} too large for memory" if skipped else "") + ")")
+                + (f", {skipped} too large" if skipped else "") + ")")
 
 
 def main():
@@ -325,6 +393,9 @@ def main():
     ap.add_argument("--max-pairs", type=float, default=None,
                     help="part sinkhorn: largest dense local problem (entries) for POT and Sinkhorn "
                          "(default: what fits in the job's memory)")
+    ap.add_argument("--sinkhorn-max-pairs", type=float, default=5e7,
+                    help="part sinkhorn: and for Sinkhorn at most this (log domain below reg 0.1: up to 10^5 passes "
+                         "over the problem, weeks per edge beyond)")
     ap.add_argument("--out", default=common.RESULTS)
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--quick", action="store_true")
