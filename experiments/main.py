@@ -20,6 +20,7 @@ a step runs, ``<out>/status/<step>.lock`` keeps other jobs from running the same
   python experiments/main.py --status                           # what is done, failed or running
   python experiments/main.py --steps e2-real --force            # recompute a step from scratch
   python experiments/main.py --steps e5-sinkhorn -- --budget 3600   # options after -- go to the step
+  python experiments/main.py --steps e5-whole --worker 2        # a second job sharing e5-whole's GRC runs
   python experiments/main.py --quick --out results-quick        # smoke test
   python experiments/main.py --list                             # the steps and what they produce
 
@@ -349,6 +350,10 @@ def _command(step, a, steps):
     return cmd + list(getattr(a, "step_args", []))
 
 
+# Steps that can run in several jobs at once (--worker): they claim each unit of work (e5-whole: each
+# GRC run) before computing it, and their tables are written under a lock (common.Rows.add).
+WORKER_STEPS = {"e5-whole"}
+
 # Steps whose rules changed so that a completed run left rows the step computes now: a record
 # with an older (or no) number is not done, and the step runs again (for those rows only).
 RULES = {
@@ -401,7 +406,8 @@ def _outcome(rc: int) -> str:
     if rc == 0:
         return "ok"
     if rc == CK.EXIT_INCOMPLETE:
-        return "finished, but some rows ended in an error (see the log); they are computed again on the next run"
+        return ("finished, but not everything is done: rows that ended in an error, or work left to other workers "
+                "(see the log); it runs again next time")
     if rc < 0:
         hint = " -- from outside the step; usually the memory limit of the job (see MaxRSS in sacct)" if rc == -9 else ""
         return f"FAILED: killed by {_signame(-rc)}{hint}"
@@ -451,6 +457,9 @@ def main(argv=None, steps=None) -> int:
                          "tables are moved to <out>/replaced/<step>-<time>/ first")
     ap.add_argument("--status", action="store_true", help="show which steps are done, failed or running, and exit")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--worker", type=int, default=0,
+                    help=f"run as worker K (1, 2, ...) of a step that shares its work between several jobs at once "
+                         f"({', '.join(sorted(WORKER_STEPS))}): each takes the runs nobody else is computing")
     ap.add_argument("--ignore-old-layout", action="store_true",
                     help="leave the result tables and downloads of an earlier run where main.py up to v1.2.0 put "
                          "them (by default they are moved into --out and --data-dir)")
@@ -472,6 +481,11 @@ def main(argv=None, steps=None) -> int:
     bad = [s for s in selected if s not in names]
     if bad:
         ap.error(f"unknown steps: {bad}")
+    if a.worker:
+        if a.force:
+            ap.error("--force cannot be used with --worker (it would set aside the tables other workers are writing)")
+        if set(selected) - WORKER_STEPS:
+            ap.error(f"--worker: only {', '.join(sorted(WORKER_STEPS))} can share their work between jobs")
     # every step gets absolute paths (resolved against the directory main.py was started from)
     a.out, a.data_dir, a.paper_dir = _abspath(a.out), _abspath(a.data_dir), _abspath(a.paper_dir)
     a.grc_python, grc_src = _grc_python(a.grc_python)
@@ -533,7 +547,7 @@ def _pipeline(a, selected, table, env) -> int:
             common.log(f"[{step}] completed before, but {_rerun_reason(*diff)}: running it again")
         cmd = _command(step, a, table)
         log_path = os.path.join(a.out, "logs", f"{step}.log")
-        lock = CK.StepLock(a.out, step)
+        lock = CK.StepLock(a.out, f"{step}.worker{a.worker}" if getattr(a, "worker", 0) else step)
         try:
             lock.acquire()
         except CK.Busy as ex:
