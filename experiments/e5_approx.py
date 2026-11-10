@@ -87,6 +87,9 @@ def part_whole(a):
             # a timeout of the old 2-hour limit, or a method it skipped, runs now (there is no limit any more);
             # so does a run given up by a job whose time or memory this one exceeds
             again = r is not None and grc_ok and (str(r.get("status") or "") in ("timeout", "skipped") or PT.retry_now(r))
+            # a partial run (its budget ran out) continues from its chunks when the budget is raised
+            again = again or (r is not None and grc_ok and str(r.get("status") or "") == "partial" and
+                              (a.grc_budget is None or a.grc_budget > 1.01 * common.num(r, "grc_budget_s")))
             if fits_now or again or \
                     (not rows.done(graph=name, method=meth) and (grc_ok or r is None or common.row_failed(r))):
                 grc_left.append(meth)
@@ -146,12 +149,16 @@ def part_whole(a):
                 # in saved chunks: a run that did not finish in one call before (a timeout, a method it
                 # skipped, killed by its job's time limit), one under way in chunks, or a large graph
                 chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or \
-                    prev in ("timeout", "skipped") or prev.startswith("did not finish") or \
+                    prev in ("timeout", "skipped", "partial") or prev.startswith("did not finish") or \
                     (st == "gave_up" and gave["status"].startswith("did not finish"))
                 if chunked:
-                    val, t, status, nch = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python, state_dir,
-                                                        chunk_s=a.grc_chunk, log=lambda msg: log(f"E5 {name:16s} {msg}"))
-                    extra = dict(chunks=nch)
+                    val, t, status, nch, ndone = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python,
+                                                               state_dir, chunk_s=a.grc_chunk, budget_s=a.grc_budget,
+                                                               log=lambda msg: log(f"E5 {name:16s} {msg}"))
+                    extra = dict(chunks=nch, grc_budget_s=a.grc_budget)
+                    if status == "partial":  # the budget ran out: scored on the edges done, time a lower bound
+                        extra.update(grc_edges_done=ndone, time_lower_s=t, time_est_s=t * g.num_edges / max(1, ndone))
+                        t = float("nan")
                 elif st == "gave_up":  # killed by its job's memory limit: only a bigger job runs it again
                     val, t, status = None, float("nan"), gave["status"]
                     extra = {k: v for k, v in gave.items() if k != "status"}
@@ -162,7 +169,8 @@ def part_whole(a):
                 val, t, status = None, float("nan"), "unavailable"
             row = dict(base, method=meth, target="idle 1/2", status=status, time_s=t, **extra)
             if val is not None:
-                row.update(agreement(k_half, val, hub))
+                ok = np.isfinite(val) if status == "partial" else np.ones(len(val), bool)
+                row.update(agreement(k_half[ok], val[ok], hub[ok]))
                 np.save(os.path.join(cache, f"{R.slug(name)}.{meth}.npy"), val)
             rows.add(row)
             grc_runs.drop((name, meth))
@@ -305,6 +313,9 @@ def main():
     ap.add_argument("--hub", type=int, default=1000, help="hub edges: an endpoint of at least this degree")
     ap.add_argument("--grc-python", default=None, help="python of the GRC environment (default $ORCUT_GRC_PYTHON)")
     ap.add_argument("--grc-chunk", type=float, default=3600.0, help="part whole: seconds per saved chunk of a long GRC run")
+    ap.add_argument("--grc-budget", type=float, default=None,
+                    help="part whole: seconds of GRC time per graph and method for chunked runs (default: none); when "
+                         "it runs out, the row is 'partial': scored on the edges done, time_lower_s a lower bound")
     ap.add_argument("--grc-chunk-above", type=int, default=10**6,
                     help="part whole: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
                          "not finish before)")
