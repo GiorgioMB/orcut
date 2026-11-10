@@ -208,8 +208,8 @@ def test_grc_in_saved_chunks_resumes_after_a_kill(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
     n = len(calls)
-    vals, t, st, nch = B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
-    assert st == "ok" and np.array_equal(vals, np.arange(g.num_edges, dtype=float))
+    vals, t, st, nch, ndone = B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
+    assert st == "ok" and ndone == g.num_edges and np.array_equal(vals, np.arange(g.num_edges, dtype=float))
     assert calls[n][0] == calls[n - 1][0]  # it restarts the killed chunk, not the two saved before it
     assert t == 2.0 * nch and nch == len(calls) - 1
 
@@ -236,3 +236,16 @@ def test_borf_resumes_after_its_last_saved_iteration(tmp_path, monkeypatch):
     monkeypatch.setattr(orcut, "certify", real)
     got, recs = E6.borf(g, 4, 5, 3, threads=1, ckpt=ck)
     assert np.array_equal(got.edges, ref.edges) and [r["iteration"] for r in recs] == [-1, 0, 1, 2, 3]
+
+
+def test_grc_reference_stops_at_its_budget_and_continues_with_a_larger_one(tmp_path, monkeypatch):
+    import baselines as B
+    import datasets as D
+    g = D.to_graph(*D.synthetic("ER", 3000, 10, 0))
+    monkeypatch.setattr(B, "grc", lambda g_, *a, ids=None, **kw: (ids.astype(float), 1.0, "ok"))  # 1 s per call
+    d = str(tmp_path / "state")
+    vals, t, st, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, 1, "py", d, chunk_s=1.0, budget_s=3.0)
+    assert st == "partial" and t == 3.0 and nch == 3 and 0 < ndone < g.num_edges
+    assert np.isnan(vals[ndone:]).all() and np.array_equal(vals[:ndone], np.arange(ndone, dtype=float))
+    vals, t, st, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, 1, "py", d, chunk_s=1e6, budget_s=1e6)
+    assert st == "ok" and ndone == g.num_edges and nch == 4  # the three saved chunks, and one for the rest
