@@ -367,14 +367,17 @@ def grc_python(explicit: Optional[str] = None) -> Optional[str]:
 
 
 def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: Optional[str], state_dir: str,
-                chunk_s: float = 3600.0, log=None):
+                chunk_s: float = 3600.0, log=None, budget_s: Optional[float] = None):
     """GraphRicciCurvature on all edges of ``g`` in contiguous chunks of edges (``grc`` with ``ids``),
     each saved to ``state_dir`` as soon as it is computed, so that a run stopped in the middle (time
     limit, node failure) resumes at the next chunk. The first chunk is small (1% of the edges, at
     least 500); the next are sized from the time per edge so far to take about ``chunk_s`` seconds
     (at least 500 edges: every call pays GRC's start-up).
-    Returns (values aligned with g.edges, GRC's seconds summed over the chunks, status, chunks); on
-    an error the chunks done so far stay saved."""
+    With ``budget_s``, no chunk starts once GRC's time so far reaches it (the last one is sized to end
+    near it): the status is then "partial", the values of the edges not computed are NaN, and the
+    seconds spent are a lower bound on GRC's time for all edges; a later call with a larger budget
+    continues from the saved chunks. Returns (values aligned with g.edges, GRC's seconds summed over
+    the chunks, status, chunks, edges computed); on an error the chunks done so far stay saved."""
     import xio
 
     os.makedirs(state_dir, exist_ok=True)
@@ -387,11 +390,15 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
     done = max((c[1] for c in state["chunks"]), default=0)
     while done < m:
         spent = sum(c[2] for c in state["chunks"])
+        if budget_s is not None and spent >= budget_s:
+            break
         size = max(500, m // 100) if done == 0 else max(500, int(chunk_s * done / max(spent, 1e-9)))
+        if budget_s is not None and done:
+            size = min(size, max(500, int((budget_s - spent) * done / max(spent, 1e-9))))
         lo, hi = done, min(m, done + max(1, size))
         val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64))
         if status != "ok":
-            return None, float("nan"), status, len(state["chunks"])
+            return None, float("nan"), status, len(state["chunks"]), done
         np.save(os.path.join(state_dir, f"{lo}.npy"), val)
         state["chunks"].append([lo, hi, float(t)])
         xio.atomic_json(state, path)
@@ -400,8 +407,10 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
             spent += t
             log(f"GRC {method} chunk {len(state['chunks'])}: edges {lo:,}-{hi:,} of {m:,} in {t:.0f}s; "
                 f"about {spent / hi * (m - hi) / 3600:.1f} h left")
-    vals = np.concatenate([np.load(os.path.join(state_dir, f"{lo}.npy")) for lo, _, _ in sorted(state["chunks"])])
-    return vals, float(sum(c[2] for c in state["chunks"])), "ok", len(state["chunks"])
+    vals = np.full(m, np.nan)
+    for lo, hi, _ in state["chunks"]:
+        vals[lo:hi] = np.load(os.path.join(state_dir, f"{lo}.npy"))
+    return vals, float(sum(c[2] for c in state["chunks"])), ("ok" if done >= m else "partial"), len(state["chunks"]), done
 
 
 def grc_atd_need(n: int) -> float:
