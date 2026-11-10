@@ -41,6 +41,7 @@ import numpy as np
 import common
 from common import Rows, log, out_dir
 import baselines as B
+import checkpoint as CK
 import registry as R
 import xio
 
@@ -195,22 +196,31 @@ def _hms(sec):
     return f"{m // 60}h{m % 60:02d}m" if m >= 60 else f"{m}m{int(sec % 60):02d}s"
 
 
-def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=None):
+def _load_plan(path, key):
+    state = xio.read_json(path, default=None)
+    return state if isinstance(state, dict) and state.get("key") == key and state.get("bounds") else None
+
+
+def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=None, claims=None):
     """All edges of ``g`` in one pass, by contiguous chunks of about ``chunk_edges`` edges on average
     (balanced by chunk_bounds). After every chunk, its time, peak memory and diagnostic counts are saved to
     ``path`` (JSON), so a run that is stopped (time limit, out of memory, node failure) resumes at the
     next chunk; the chunk boundaries are those of the first run. The time is the sum over the chunks
     (each one call of orcut.curvature with all ``threads``), the peak memory the largest over them.
-    Returns (state, totals of _combine)."""
+    With ``claims`` (a folder), several workers (main.py --worker) can solve the same graph at once:
+    each chunk is claimed by one of them. The worker that finds every chunk done and gets the row's
+    claim returns (state, totals of _combine, that claim), and releases the claim once it has written
+    the row; every other worker returns None. Without ``claims`` the third value is None."""
     import orcut
 
     key = dict(graph=label, measure=str(measure), n=int(g.num_nodes), m=int(g.num_edges), threads=int(threads))
-    state = xio.read_json(path, default=None)
     k = max(1, -(-g.num_edges // max(1, int(chunk_edges))))
-    if not (isinstance(state, dict) and state.get("key") == key and state.get("bounds")) or \
-            (not state.get("chunks") and state.get("k") != k):  # nothing done yet: the new chunk size
-        state = dict(key=key, k=k, bounds=chunk_bounds(g, k), chunks={})
-        xio.atomic_json(state, path)
+    with xio.locked(path):  # workers that start together agree on one plan
+        state = _load_plan(path, key)
+        if state is None or (not state.get("chunks") and state.get("k") != k):  # nothing done yet: the new size
+            state = dict(key=key, k=k, bounds=chunk_bounds(g, k), chunks={})
+            xio.atomic_json(state, path)
+    base = os.path.basename(path)[:-len(".json")]
     bounds, done = state["bounds"], state["chunks"]
     nch = len(bounds) - 1
     if done and len(done) < nch:
@@ -223,6 +233,17 @@ def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=Non
     for c in range(nch):
         if str(c) in done:
             continue
+        lock = None
+        if claims:
+            lock = CK.StepLock(claims, f"{base}.c{c}")
+            try:
+                lock.acquire()
+            except CK.Busy:
+                continue  # another worker is computing this chunk
+            done = (_load_plan(path, key) or state)["chunks"]
+            if str(c) in done:
+                lock.release()
+                continue
         lo, hi = bounds[c], bounds[c + 1]
         with RSSSampler() as s:
             t0 = time.perf_counter()
@@ -231,14 +252,29 @@ def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=Non
         st = _chunk_stats(res["curvature"], res["diagnostics"], hub[lo:hi])
         del res
         st.update(seconds=dt, peak_mb=s.peak - s.base, host=socket.gethostname(), finished=time.strftime("%Y-%m-%d %H:%M:%S"))
-        done[str(c)] = st
-        xio.atomic_json(state, path)
+        with xio.locked(path):  # merge with the chunks other workers saved meanwhile
+            state = _load_plan(path, key) or state
+            state["chunks"][str(c)] = st
+            xio.atomic_json(state, path)
+        done = state["chunks"]
+        if lock is not None:
+            lock.release()
         spent = sum(x["seconds"] for x in done.values())
         log(f"E3 {label:16s} {measure!s:8s} chunk {c + 1}/{nch} ({hi - lo:,} edges) {_hms(dt)}; {len(done)}/{nch} done "
             f"in {_hms(spent)}, about {_hms(spent / len(done) * (nch - len(done)))} left")
         if after_chunk is not None:
             after_chunk(c)
-    return state, _combine(done.values())
+    state = _load_plan(path, key) or state
+    if len(state["chunks"]) < nch:
+        return None  # chunks still under way on other workers
+    finish = None
+    if claims:
+        finish = CK.StepLock(claims, f"{base}.row")
+        try:
+            finish.acquire()
+        except CK.Busy:
+            return None  # another worker is writing the row
+    return state, _combine(state["chunks"].values()), finish
 
 
 def _pot_ckpt(a, name):
@@ -257,6 +293,8 @@ def part_real(a):
     from orcut import _core as C
 
     rows = Rows(f"{out_dir(a.out, 'e3')}/real.csv", ["graph", "measure"])
+    claims = os.path.join(out_dir(a.out, "e3", "partial"), "claims")  # chunks and rows taken by workers
+    left = []  # rows left to other workers (main.py --worker): the step is done only once they are
     graphs = a.graphs or (R.MEDIUM + R.LARGE + R.XLARGE)
     if a.quick:
         graphs = ["bundled:jazz", "synth:CL2.1:10000:12:0"]
@@ -271,12 +309,19 @@ def part_real(a):
         big = g.num_edges > 10**7
         chunked = a.chunk_edges > 0 and g.num_edges > a.chunk_above
         for measure in measures:
+            rows.refresh()  # rows other workers wrote meanwhile
             if rows.done(graph=name, measure=measure):
                 continue
             if chunked:
                 # one pass, saved chunk by chunk: a run stopped by the time limit resumes where it was
                 ckpt = os.path.join(out_dir(a.out, "e3", "partial"), f"{R.slug(name)}.{measure}.T{a.threads}.json")
-                state, tot = solve_chunked(g, measure, a.threads, ckpt, min(a.chunk_edges, max(1, g.num_edges // 20)), name)
+                got = solve_chunked(g, measure, a.threads, ckpt, min(a.chunk_edges, max(1, g.num_edges // 20)), name,
+                                    claims=claims)
+                if got is None:
+                    log(f"E3 {name:16s} {measure:8s} its other chunks are being computed by other workers")
+                    left.append((name, measure))
+                    continue
+                state, tot, finish = got
                 peak = tot["peak_mb"]
                 row = dict(graph=name, measure=measure, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"],
                            deg_mean=meta["deg_mean"], threads=a.threads, time_s=tot["seconds"], time_min_s=tot["seconds"],
@@ -294,9 +339,17 @@ def part_real(a):
                 rows.add(row)
                 _finish_chunked(ckpt)
                 _finish_chunked(_pot_ckpt(a, name))
+                if finish is not None:
+                    finish.release()
                 log(f"E3 {name:16s} {measure:8s} m={g.num_edges:>11,} T={a.threads} {row['time_s']:9.2f}s "
                     f"peak+{peak:8.1f}MB" + (f" POT est {row.get('pot_est_s', float('nan')):9.1f}s" if measure == "lazy" else "")
                     + f" ({row['chunks']} chunks)")
+                continue
+            row_lock = CK.StepLock(claims, f"{R.slug(name)}.{measure}.T{a.threads}.row")  # one worker per row
+            try:
+                row_lock.acquire()
+            except CK.Busy:
+                left.append((name, measure))
                 continue
             solve_all(g, measure, a.threads)  # warm (and page in the graph)
             times = []
@@ -332,11 +385,16 @@ def part_real(a):
                     row.update(pot_est_1thread_s=full, pot_solve_est_1thread_s=solve, pot_timed=timed,
                                pot_est_s=full / a.threads, pot_free_share=free)
             rows.add(row)
+            row_lock.release()
             if measure == "lazy" and not a.no_pot:
                 _finish_chunked(_pot_ckpt(a, name))
             log(f"E3 {name:16s} {measure:8s} m={g.num_edges:>11,} T={a.threads} {row['time_s']:9.2f}s "
                 f"peak+{peak:8.1f}MB" + (f" POT est {row.get('pot_est_s', float('nan')):9.1f}s" if measure == "lazy" else ""))
         del g
+    rows.refresh()
+    for name, measure in left:  # left to other workers: done only once they are
+        if not rows.done(graph=name, measure=measure):
+            common.mark_incomplete(f"{name} {measure}")
 
 
 def part_threads(a):
@@ -421,6 +479,8 @@ def part_synth(a):
         sizes_fixed, sizes_grow, fams = [10**3, 10**4], [10**3, 3 * 10**3], ["ER", "CL2.1"]
     plan = [(f, "fixed16", n, 16.0) for f in fams for n in sizes_fixed] + \
            [(f, "grow0.4", n, 2.1 * n ** 0.4) for f in fams for n in sizes_grow]
+    claims = os.path.join(out_dir(a.out, "e3", "partial"), "claims")  # chunks and rows taken by workers
+    left = []  # rows left to other workers (main.py --worker): the step is done only once they are
     pending = [(fam, regime, n, d, seed) for fam, regime, n, d in plan for seed in range(a.seeds)
                if not synth_done(rows, fam, regime, n, seed)]
     while pending:
@@ -430,6 +490,9 @@ def part_synth(a):
                      a.defer_above), pending[0])
         pending.remove(item)
         fam, regime, n, d, seed = item
+        rows.refresh()  # rows other workers wrote meanwhile
+        if synth_done(rows, fam, regime, n, seed):
+            continue
         import datasets as D
 
         nn, e = D.synthetic(fam, n, d, seed)
@@ -443,11 +506,22 @@ def part_synth(a):
             log(f"E3S {fam:6s} {regime:8s} n={nn:>9,} m={g.num_edges:>11,} predicted {_hms(pred)} per solve, "
                 f"{k} chunks")
             ckpt = os.path.join(out_dir(a.out, "e3", "partial"), f"synth.{R.slug(fam)}.{regime}.n{n}.s{seed}.T{a.threads}.json")
-            state, tot = solve_chunked(g, "lazy", a.threads, ckpt, max(1, -(-g.num_edges // k)), f"{fam} n={nn}")
+            got = solve_chunked(g, "lazy", a.threads, ckpt, max(1, -(-g.num_edges // k)), f"{fam} n={nn}", claims=claims)
+            if got is None:
+                log(f"E3S {fam:6s} {regime:8s} n={nn:>9,} its other chunks are being computed by other workers")
+                left.append(item)
+                continue
+            state, tot, finish = got
             t = tot["seconds"]
             extra = dict(chunks=len(state["bounds"]) - 1, chunk_hosts=len({str(c.get("host")) for c in state["chunks"].values()}))
         else:
             ckpt = None
+            finish = CK.StepLock(claims, f"synth.{R.slug(fam)}.{regime}.n{n}.s{seed}.T{a.threads}.row")  # one worker
+            try:
+                finish.acquire()
+            except CK.Busy:
+                left.append(item)
+                continue
             solve_all(g, "lazy", a.threads)
             t, _ = common.best_of(lambda: solve_all(g, "lazy", a.threads), reps=a.reps if g.num_edges < 10**7 else 1)
         W = int(np.sum(g.deg[g.edges[:, 0]] + g.deg[g.edges[:, 1]]))
@@ -462,7 +536,13 @@ def part_synth(a):
         _finish_chunked(pck)
         if ckpt:
             _finish_chunked(ckpt)
+        if finish is not None:
+            finish.release()
         log(f"E3S {fam:6s} {regime:8s} n={nn:>9,} m={g.num_edges:>11,} {t:8.2f}s")
+    rows.refresh()
+    for fam, regime, n, d, seed in left:  # left to other workers: done only once they are
+        if not synth_done(rows, fam, regime, n, seed):
+            common.mark_incomplete(f"{fam} {regime} n={n} seed={seed}")
 
 
 def main():
