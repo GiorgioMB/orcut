@@ -63,7 +63,7 @@ def test_chunks_resume_and_match_one_call(g, tmp_path, monkeypatch):
         E.solve_chunked(g, "lazy", 1, path, g.num_edges // 6, "G", after_chunk=stop_after_2)
     assert sorted(json.load(open(path))["chunks"]) == ["0", "1"]
     second = []
-    state, tot = E.solve_chunked(g, "lazy", 1, path, g.num_edges // 6, "G", after_chunk=second.append)
+    state, tot, _ = E.solve_chunked(g, "lazy", 1, path, g.num_edges // 6, "G", after_chunk=second.append)
     nch = len(state["bounds"]) - 1
     assert first + second == list(range(nch)) and nch >= 6  # the saved chunks are not computed again
     ref, nan = _one_call(g)
