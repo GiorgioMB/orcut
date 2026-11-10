@@ -10,6 +10,8 @@ import sys
 import textwrap
 import time
 
+import numpy as np
+
 import pytest
 
 EXP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "experiments")
@@ -545,7 +547,8 @@ def test_sinkhorn_rows_of_the_old_budget_run_again(tmp_path, monkeypatch):
     t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
     t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.03, sample=558, timed=369))        # cut by the old budget
     t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.1, sample=558, timed=558))         # complete
-    t.add(dict(graph="Squirrel", method="sinkhorn", reg=0.03, sample=500, timed=470, skipped_memory=30))  # new: done
+    t.add(dict(graph="Squirrel", method="sinkhorn", reg=0.03, sample=500, timed=470, skipped_memory=30,
+               max_pairs=5e7, time_edge_weighted_s=1e-3, untimed_share=0.0))                   # new: done
     t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
     a = argparse.Namespace()
     assert not E5.sinkhorn_done(t, a, graph="Twitch-DE", method="sinkhorn", reg=0.03)
@@ -560,10 +563,50 @@ def test_sinkhorn_rows_that_skipped_edges_for_memory_run_again_with_more(tmp_pat
     t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
     t.add(dict(graph="GitHub", method="pot", reg=0.0, sample=651, timed=650, skipped_memory=1))   # old cap: 5e7
     t.add(dict(graph="Squirrel", method="pot", reg=0.0, sample=500, timed=500, skipped_memory=0))
-    t.add(dict(graph="Big", method="pot", reg=0.0, sample=10, timed=9, skipped_memory=1, max_pairs=7e8))
+    t.add(dict(graph="Big", method="pot", reg=0.0, sample=10, timed=9, skipped_memory=1, max_pairs=7e8,
+               time_edge_weighted_s=1e-3, untimed_share=0.0))
     t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
     a = argparse.Namespace()
     assert not E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="pot", reg=0.0)   # fits in this job now
     assert E5.sinkhorn_done(t, a, 7e8, graph="Squirrel", method="pot", reg=0.0)
     assert E5.sinkhorn_done(t, a, 7e8, graph="Big", method="pot", reg=0.0)          # no more memory than before
     assert not E5.sinkhorn_done(t, a, 2e9, graph="Big", method="pot", reg=0.0)      # a job with more
+
+
+def test_sinkhorn_estimate_covers_the_timed_bins_and_rows_redo_once(tmp_path, monkeypatch):
+    import argparse
+    import e5_approx as E5
+    strata = [(0, np.arange(3), 600), (1, np.arange(2), 399), (2, np.arange(1), 1)]   # the top bin: one hub edge
+    times = [np.array([1.0, 1.0, 1.0]), np.array([2.0, np.nan]), np.array([np.nan])]   # never timed
+    tot, untimed = E5._estimate_covered(strata, times, 1000)
+    assert tot == pytest.approx((600 * 1.0 + 399 * 2.0) / 999 * 1000) and untimed == pytest.approx(0.001)
+    monkeypatch.setattr(common, "_TABLES", [])
+    t = common.Rows(str(tmp_path / "s.csv"), ["graph", "method", "reg"])
+    t.add(dict(graph="GitHub", method="sinkhorn", reg=0.01, sample=651, timed=650, skipped_memory=1,
+               time_edge_weighted_s=float("nan")))                                     # the old NaN row
+    t.add(dict(graph="GitHub", method="sinkhorn", reg=0.03, sample=651, timed=650, skipped_memory=1,
+               max_pairs=5e7, time_edge_weighted_s=2e-3, untimed_share=1e-6))          # redone: finite
+    t = common.Rows(str(tmp_path / "s.csv"), ["graph", "method", "reg"])
+    a = argparse.Namespace(sinkhorn_max_pairs=5e7)
+    assert not E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="sinkhorn", reg=0.01)   # redone once
+    assert E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="sinkhorn", reg=0.03)       # then done
+    assert E5.method_limit("pot", 7e8, a) == 7e8 and E5.method_limit("sinkhorn", 7e8, a) == 5e7
+
+
+def test_two_writers_of_one_table_keep_each_others_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "_TABLES", [])
+    a = common.Rows(str(tmp_path / "t.csv"), ["graph", "method"])
+    b = common.Rows(str(tmp_path / "t.csv"), ["graph", "method"])  # another worker, opened at the same time
+    a.add(dict(graph="G", method="grc-mix", status="ok"))
+    b.add(dict(graph="G", method="grc-otd", status="ok"))
+    a.add(dict(graph="H", method="grc-mix", status="ok"))
+    got = {(r["graph"], r["method"]) for r in common.read_csv(str(tmp_path / "t.csv"))}
+    assert got == {("G", "grc-mix"), ("G", "grc-otd"), ("H", "grc-mix")}
+
+
+def test_workers_only_for_steps_that_share_work(fake):
+    run, calls, out = fake
+    with pytest.raises(SystemExit):
+        run("--steps", "s1", "--worker", "2")
+    with pytest.raises(SystemExit):
+        run("--steps", "e5-whole", "--worker", "2", "--force")
