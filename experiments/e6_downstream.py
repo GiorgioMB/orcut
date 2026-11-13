@@ -246,6 +246,8 @@ def part_borf(a):
                 else:
                     grc_runs.begin((name,), "grc")
                     val, t, status = B.grc(g, "OTDSinkhornMix", 0.0, 3000, a.threads, a.grc_python)
+                for k, v in B.grc_row_fields(status).items():
+                    extra.setdefault(k, v)  # killed at the memory limit: what a job with more memory compares with
             else:
                 val, t, status = None, float("nan"), "unavailable"
             row = dict(base, backend="grc", status=status, curv_per_iter_s=t, **extra)
