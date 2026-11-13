@@ -11,8 +11,10 @@ out-of-memory kill, and only what is left is computed. There are checkpoints at 
   its tables, except rows that hold no result (an error, or GraphRicciCurvature unavailable),
   which are computed again.
 
-``artifacts`` runs again when the result tables changed since its last run, and a GRC step that
-completed without GraphRicciCurvature runs again (for the GRC rows) once GRC is available. While
+``artifacts`` runs again when the result tables changed since its last run, a GRC step that
+completed without GraphRicciCurvature runs again (for the GRC rows) once GRC is available, and a
+step whose tables hold rows skipped for memory (or killed at the memory limit) runs again (for
+these rows) in a job with more memory than the one that completed it. While
 a step runs, ``<out>/status/<step>.lock`` keeps other jobs from running the same step at once.
 
   python experiments/main.py --threads 32                       # everything, in order
@@ -45,6 +47,7 @@ import time
 
 import checkpoint as CK
 import common
+import partial as PT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -368,6 +371,37 @@ RULES = {
 }
 
 
+MEMORY_STATUS = ("skipped: needs", "out of memory")  # rows that only a job with more memory can compute
+
+
+def _memory_gated(step, out) -> int:
+    """Rows of the step's tables left for a job with more memory: a status column (``status`` or
+    ``<method>_status``) that says it was skipped for memory or killed at the memory limit, or edges
+    skipped for memory (``skipped_memory``, E5's Sinkhorn part)."""
+    n = 0
+    for f in _step_outputs(step, out):
+        if f.endswith(".csv"):
+            n += sum(1 for r in common.read_csv(f)
+                     if common.num(r, "skipped_memory", 0.0) > 0 or
+                     any((k == "status" or k.endswith("_status")) and str(v or "").startswith(MEMORY_STATUS)
+                         for k, v in r.items()))
+    return n
+
+
+def _more_memory(rec, step, out):
+    """Why a step that completed before runs again in this job, for its rows left for more memory:
+    there are such rows, and this job has more memory than the one that completed it (or its record
+    does not say how much it had). None otherwise; the step itself decides which rows fit now."""
+    mem, had = PT.memory_limit(), rec.get("mem_bytes")
+    if not mem or (had is not None and not mem > 1.01 * float(had)):
+        return None
+    n = _memory_gated(step, out)
+    if not n:
+        return None
+    return (f"{n} row(s) were skipped for memory or ran out of it, and this job has {mem / 2**30:.0f} GB"
+            + (f" (it completed with {float(had) / 2**30:.0f} GB)" if had is not None else ""))
+
+
 def _config(step, a):
     """What a completed run of ``step`` must have run with to count as done: the same --quick and
     rules (RULES); for the GRC steps, the same GRC interpreter (a run without GRC is done until
@@ -540,6 +574,11 @@ def _pipeline(a, selected, table, env) -> int:
         rec = CK.load(a.out, step)
         ok, diff = CK.done(rec, cfg)
         if ok and not a.force:
+            why = _more_memory(rec, step, a.out)
+            if why:
+                common.log(f"[{step}] completed before, but {why}: running it again (for these rows only)")
+                ok = False
+        if ok and not a.force:
             common.log(f"[{step}] done on {rec.get('finished', '?')} (exit 0 after {rec.get('seconds', '?')}s); "
                        f"skipped (--force computes it again from scratch)")
             outcome[step] = "skipped"
@@ -573,7 +612,7 @@ def _pipeline(a, selected, table, env) -> int:
         try:
             common.log(f"[{step}] {' '.join(cmd[1:])}  (log: {log_path})")
             rec = dict(step=step, quick=bool(a.quick), config=cfg, started=CK.now(), host=socket.gethostname(),
-                       job=CK.job_id(), git=env.get("git"), cmd=cmd, log=log_path)
+                       job=CK.job_id(), git=env.get("git"), cmd=cmd, log=log_path, mem_bytes=PT.memory_limit())
             t0 = time.time()
             try:
                 rc = _run(cmd, log_path, lock, getattr(a, "env", None))
