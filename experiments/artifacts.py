@@ -77,6 +77,14 @@ def _f_num(x, sig: int = 3) -> str:
     return s
 
 
+def nanstat(fn, x) -> float:
+    """``fn`` (np.nanmedian, np.nanmax, ...) of ``x``: NaN when no value is there, without numpy's
+    All-NaN warning. Partial results leave whole columns empty (proxies have no MAE, small graphs no
+    hub edges, rows not computed yet); the number is then shown as -- or left out, as before."""
+    a = np.asarray(x, dtype=float).ravel()
+    return float(fn(a)) if np.any(~np.isnan(a)) else float("nan")
+
+
 def f_sci(x, sig: int = 2) -> str:
     return _m(_f_sci(x, sig))
 
@@ -125,7 +133,7 @@ def f_pct(p, dec: int = 1) -> str:
 
 
 def tex_name(s: str) -> str:
-    """A graph or method name for LaTeX: K_{20} -> $K_{20}$, mu=0.3 -> $\mu{=}0.3$, specials escaped."""
+    r"""A graph or method name for LaTeX: K_{20} -> $K_{20}$, mu=0.3 -> $\mu{=}0.3$, specials escaped."""
     import re
 
     s = str(s).replace("&", r"\&").replace("%", r"\%")
@@ -168,7 +176,7 @@ def block_e1(R, O: Out):
         if c in d:
             mm += int(np.nansum(d[c].astype(float)))
     O.put("EOneOracleMismatches", f_int(mm), "e1: mismatches with the frozen kernel, the oracle, the layered closure")
-    O.put("EOnePotMaxDiff", f_sci(np.nanmax(d["pot_maxdiff"].astype(float))), "e1: max |orcut - POT|")
+    O.put("EOnePotMaxDiff", f_sci(nanstat(np.nanmax, d["pot_maxdiff"].astype(float))), "e1: max |orcut - POT|")
     O.put("EOneCertChecked", f_int(d["cert_checked"].sum()), "e1: certificates computed")
     O.put("EOneCertFailed", f_int(d["cert_failed"].sum() + d["verify_failed"].sum()), "e1: certificates failed")
     O.put("EOneVerifyChecked", f_int(d["verify_checked"].sum()), "e1: certificates re-verified from scratch")
@@ -180,7 +188,7 @@ def block_e1(R, O: Out):
         for c in ("frozen_mismatch", "oracle_mismatch", "layered_mismatch"):
             if c in sub:
                 mm_ += int(np.nansum(sub[c].astype(float)))
-        pmax = np.nanmax(sub["pot_maxdiff"].astype(float)) if sub["pot_maxdiff"].notna().any() else float("nan")
+        pmax = nanstat(np.nanmax, sub["pot_maxdiff"].astype(float)) if sub["pot_maxdiff"].notna().any() else float("nan")
         lines.append(" & ".join([names.get(meas, meas), f_int(sub["graph"].nunique()), f_int(sub["m"].sum()),
                                  f"{f_int(sub['ortools_checked'].sum())} / {f_int(sub['ortools_mismatch'].sum())}",
                                  f_int(mm_) if meas in ("lazy", "nonlazy", "lly") else "--",
@@ -199,7 +207,34 @@ E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut, no witness rela
               ("ortools", "OR-Tools (given distances)", "-.", "D"), ("highs", "HiGHS (given distances)", ":", "v"),
               ("oracle", "previous solver", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
-FIG_W = 5.5  # text width of the paper (inches)
+FIG_W = 5.5  # text width of the paper (inches): figures are drawn at the width they are printed at
+
+
+def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
+    """A legend centred under the axes, with as many columns as fit in the figure's width (spread
+    evenly over its rows). Returns the fraction of the figure's height it takes, for the bottom of
+    tight_layout's rect, so that the axes stop above it."""
+    renderer = fig.canvas.get_renderer()
+    width, height = fig.get_figwidth() * fig.dpi, fig.get_figheight() * fig.dpi
+    n = len(labels)
+    for ncol in range(n, 0, -1):
+        ncol = math.ceil(n / math.ceil(n / ncol))  # the same number of rows, with columns as even as possible
+        leg = fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=ncol,
+                         fontsize=fontsize, frameon=False, **kw)
+        bb = leg.get_window_extent(renderer)
+        if bb.width <= 0.98 * width or ncol == 1:
+            return bb.height / height + pad
+        leg.remove()
+    return pad
+
+
+def _graph_styles(n):
+    """(colour, line style) for n graphs, all different: the dark tab20 colours with solid lines, then
+    the light ones with dashed lines, then again (tab10 alone repeats a colour from the 11th graph on)."""
+    import matplotlib.pyplot as plt
+
+    cm = plt.get_cmap("tab20")
+    return [(cm((2 * k) % 20 + (k // 10) % 2), "-" if (k // 10) % 2 == 0 else "--") for k in range(n)]
 
 
 def _slope(x, y):
@@ -297,10 +332,10 @@ def block_e2(R, O: Out, figdir: str):
                                      rr("nowitness_s"), rr("witness_s"), rr("graphflow_s")]) + r" \\")
         O.table("witness", lines)
         if np.isfinite(sl_w).any():
-            O.put("ETwoWitnessArcSlopeMax", f_num(np.nanmax(sl_w), 2),
+            O.put("ETwoWitnessArcSlopeMax", f_num(nanstat(np.nanmax, sl_w), 2),
                   "e2/sym: max over regimes of the fitted exponent of witness arcs against the local input")
         if np.isfinite(sl_n).any():
-            O.put("ETwoNoWitnessArcSlopeMax", f_num(np.nanmax(sl_n), 2),
+            O.put("ETwoNoWitnessArcSlopeMax", f_num(nanstat(np.nanmax, sl_n), 2),
                   "e2/sym: max over regimes of the exponent of arcs without witness relays against the local input")
     # memory of the general-purpose input at the largest size
     O.put("ETwoDistBytesMax", f_num(d["pot_input_bytes"].max() / 2**20) + r"\,MB", "e2: POT cost matrix at largest size")
@@ -333,9 +368,8 @@ def block_e2(R, O: Out, figdir: str):
                 if ll not in l:
                     h.append(hh)
                     l.append(ll)
-        fig.legend(h, l, loc="lower center", ncol=4 if len(l) <= 8 else 5, fontsize=6, frameon=False,
-                   handlelength=1.8, columnspacing=1.0)
-        fig.tight_layout(rect=(0, 0.17 if len(regimes) == 1 else 0.05, 1, 1))
+        bottom = _legend_below(fig, h, l, 6, handlelength=2.6, columnspacing=1.2)
+        fig.tight_layout(rect=(0, bottom, 1, 1))
         fig.savefig(os.path.join(figdir, name))
         plt.close(fig)
     # real graphs, per bin
@@ -356,10 +390,11 @@ def block_e2(R, O: Out, figdir: str):
             O.put("ETwoRealGraphflowMedian", f_x(np.median(gf)), "e2/real_bins: median over graphs of graph min-cost flow/ours")
             O.put("ETwoRealGraphflowMin", f_x(np.min(gf)), "e2/real_bins: min over graphs of graph min-cost flow/ours")
             O.put("ETwoRealGraphflowMax", f_x(np.max(gf)), "e2/real_bins: max over graphs of graph min-cost flow/ours")
-        rp = np.array([p / o for _, o, p, _ in rows])
-        rb = np.array([(p + bb) / o for _, o, p, bb in rows])
-        O.put("ETwoRealPotMedian", f_x(np.median(rp)), "e2/real_bins: median over graphs of POT(solve)/ours, per edge")
-        O.put("ETwoRealPotBuildMedian", f_x(np.median(rb)), "e2/real_bins: median of (POT + build)/ours")
+        if rows:
+            rp = np.array([p / o for _, o, p, _ in rows])
+            rb = np.array([(p + bb) / o for _, o, p, bb in rows])
+            O.put("ETwoRealPotMedian", f_x(np.median(rp)), "e2/real_bins: median over graphs of POT(solve)/ours, per edge")
+            O.put("ETwoRealPotBuildMedian", f_x(np.median(rb)), "e2/real_bins: median of (POT + build)/ours")
         O.put("ETwoRealGraphs", f_int(len(rows)), "e2/real_bins: graphs")
     except FileNotFoundError:
         O.missing.append("e2/real_bins.csv")
@@ -394,8 +429,8 @@ def block_e2c(R, O: Out):
     big = g[g["n"] == g["n"].max()]
     O.put("EDasOursMaxTime", f_time(big["ours_s"].max()), "e2/dasgupta: time of the slowest kind at the largest n")
     if np.isfinite(slopes).any():
-        O.put("EDasSlopeMax", f_num(np.nanmax(slopes), 2), "e2/dasgupta: max over kinds of the fitted exponent of time against n")
-        O.put("EDasSlopeMin", f_num(np.nanmin(slopes), 2), "e2/dasgupta: min over kinds of the same")
+        O.put("EDasSlopeMax", f_num(nanstat(np.nanmax, slopes), 2), "e2/dasgupta: max over kinds of the fitted exponent of time against n")
+        O.put("EDasSlopeMin", f_num(nanstat(np.nanmin, slopes), 2), "e2/dasgupta: min over kinds of the same")
     if pot:
         O.put("EDasPotMaxN", f_int(max(n_ for _, n_ in pot)), "e2/dasgupta: largest n with POT (distance matrix within the guard)")
         O.put("EDasPotOverOursMin", f_x(min(r for r, _ in pot)), "e2/dasgupta: (POT + distance matrix)/ours there, min over kinds")
@@ -440,18 +475,18 @@ def block_e3(R, O: Out, figdir: str):
         O.put("EThreePotSpeedupMin", f_x(np.min(sp)), "e3/real: min POT-estimate / orcut")
         if "pot_solve_est_1thread_s" in ok:
             sp2 = ok["pot_solve_est_1thread_s"].astype(float) / ok["threads"].astype(float) / ok["time_s"].astype(float)
-            O.put("EThreePotSolveSpeedupMedian", f_x(np.nanmedian(sp2)),
+            O.put("EThreePotSolveSpeedupMedian", f_x(nanstat(np.nanmedian, sp2)),
                   "e3/real: median (POT solves only, distance matrices free, perfect scaling) / orcut")
-            O.put("EThreePotSolveSpeedupMax", f_x(np.nanmax(sp2)), "e3/real: max of the same")
+            O.put("EThreePotSolveSpeedupMax", f_x(nanstat(np.nanmax, sp2)), "e3/real: max of the same")
     if "twin_ratio_hub_max" in lz:
-        O.put("EThreeTwinMax", f_num(np.nanmax(lz["twin_ratio_hub_max"].astype(float))), "e3/real: max rows/groups on hub edges")
+        O.put("EThreeTwinMax", f_num(nanstat(np.nanmax, lz["twin_ratio_hub_max"].astype(float))), "e3/real: max rows/groups on hub edges")
     if "share_witness" in lz:
-        O.put("EThreeShareWitnessMedian", f_pct(np.nanmedian(lz["share_witness"].astype(float))),
+        O.put("EThreeShareWitnessMedian", f_pct(nanstat(np.nanmedian, lz["share_witness"].astype(float))),
               "e3/real: median share of edges solved with witness relays")
-        O.put("EThreeShareWitnessMax", f_pct(np.nanmax(lz["share_witness"].astype(float))),
+        O.put("EThreeShareWitnessMax", f_pct(nanstat(np.nanmax, lz["share_witness"].astype(float))),
               "e3/real: max share of edges solved with witness relays")
     if "share_fast" in lz:
-        O.put("EThreeShareFastMedian", f_pct(np.nanmedian(lz["share_fast"].astype(float))), "e3/real: median share of the fast path")
+        O.put("EThreeShareFastMedian", f_pct(nanstat(np.nanmedian, lz["share_fast"].astype(float))), "e3/real: median share of the fast path")
     other = d[d["measure"] != "lazy"]
     if len(other):
         rel = []
@@ -598,9 +633,9 @@ def block_e5(R, O: Out, figdir: str):
             continue
         n_to = int((sub.get("status", "") == "timeout").sum()) if "status" in sub else 0
         def med(col):
-            return float(np.nanmedian(sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
+            return float(nanstat(np.nanmedian, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
         def mx(col):
-            return float(np.nanmax(sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
+            return float(nanstat(np.nanmax, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
         cells = [label, f"{len(sub_ok)}/{len(sub)}",
                  f_sci(med("mae")) if math.isfinite(med("mae")) else "--",
                  f_num(mx("max_err"), 2) if math.isfinite(mx("max_err")) else "--",
@@ -616,10 +651,10 @@ def block_e5(R, O: Out, figdir: str):
                 O.put(f"EFiveGrc{key}SlowdownMedian", f_x(np.median(r)), f"e5/whole: median time({meth})/time(orcut)")
                 O.put(f"EFiveGrc{key}SlowdownMax", f_x(np.max(r)), f"e5/whole: max time({meth})/time(orcut)")
             if "hub_max_err" in sub:
-                O.put(f"EFiveGrc{key}HubMaxErr", f_num(np.nanmax(sub["hub_max_err"].astype(float)), 2),
+                O.put(f"EFiveGrc{key}HubMaxErr", f_num(nanstat(np.nanmax, sub["hub_max_err"].astype(float)), 2),
                       f"e5/whole: max error on hub edges ({meth})")
             if "max_err" in sub:
-                O.put(f"EFiveGrc{key}MaxErr", f_num(np.nanmax(sub["max_err"].astype(float)), 2), f"e5/whole: max error ({meth})")
+                O.put(f"EFiveGrc{key}MaxErr", f_num(nanstat(np.nanmax, sub["max_err"].astype(float)), 2), f"e5/whole: max error ({meth})")
     to = d[d.get("status", "") == "timeout"] if "status" in d else d.iloc[0:0]
     O.put("EFiveGrcTimeouts", f_int(len(to)), "e5/whole: GRC runs over the time limit")
     O.put("EFiveGraphs", f_int(d["graph"].nunique()), "e5/whole: graphs")
@@ -630,31 +665,46 @@ def block_e5(R, O: Out, figdir: str):
         import matplotlib.pyplot as plt
 
         s = load(R, "e5/sinkhorn.csv")
-        fig, ax = plt.subplots(figsize=(3.25, 2.3))
-        for gname, sub in s.groupby("graph"):
-            sk = sub[sub["method"] == "sinkhorn"].sort_values("reg")
-            line, = ax.loglog(sk["time_edge_weighted_s"], sk["mae_weighted"].clip(lower=1e-12), marker="o", ms=3, lw=1,
-                              label=gname)
-            for _, r in sk.iterrows():
-                ax.annotate(f"{r['reg']:g}", (r["time_edge_weighted_s"], max(r["mae_weighted"], 1e-12)), fontsize=5,
-                            xytext=(2, 2), textcoords="offset points")
+        from matplotlib.lines import Line2D
+
+        # one colour and line style per graph; one marker per regularization (instead of a number at
+        # each point, which piled up); the exact time of orcut as a dotted vertical line in the colour
+        sk_all = s[s["method"] == "sinkhorn"]
+        regs = sorted(sk_all["reg"].astype(float).unique(), reverse=True)
+        marks = dict(zip(regs, ["o", "s", "^", "D", "v", "P", "X", "*"] * 2))
+        names = sorted(s["graph"].unique(), key=lambda x: str(x).lower())
+        fig, ax = plt.subplots(figsize=(FIG_W, 3.4))
+        handles = []
+        for (col, ls), gname in zip(_graph_styles(len(names)), names):
+            sub = s[s["graph"] == gname]
+            sk = sub[sub["method"] == "sinkhorn"].sort_values("reg", ascending=False)
+            x, y = sk["time_edge_weighted_s"].astype(float), sk["mae_weighted"].astype(float).clip(lower=1e-12)
+            ax.loglog(x, y, color=col, ls=ls, lw=1)
+            for reg, xx, yy in zip(sk["reg"].astype(float), x, y):
+                ax.loglog([xx], [yy], ls="none", marker=marks[reg], ms=4, color=col, mec="white", mew=0.3)
             o = sub[sub["method"] == "orcut"]
             if len(o):
-                ax.axvline(float(o["time_edge_weighted_s"].iloc[0]), color=line.get_color(), ls=":", lw=0.8)
-        ax.plot([], [], color="0.3", ls=":", lw=0.8, label="orcut (exact)")
+                ax.axvline(float(o["time_edge_weighted_s"].iloc[0]), color=col, ls=":", lw=0.9)
+            handles.append(Line2D([], [], color=col, ls=ls, lw=1.2, label=gname))
+        handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label="orcut (exact)"))
+        ax.add_artist(ax.legend(handles=[Line2D([], [], ls="none", marker=marks[r], ms=4, color="0.25", label=f"{r:g}")
+                                         for r in regs], title=r"Sinkhorn, $\varepsilon$", loc="upper right",
+                                fontsize=7, title_fontsize=7, frameon=False, handletextpad=0.3))
         ax.set_xlabel("seconds per edge (one thread)", fontsize=8)
         ax.set_ylabel("mean absolute error", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.grid(True, lw=0.3, alpha=0.5)
-        ax.legend(fontsize=5, frameon=False)
-        fig.tight_layout()
+        bottom = _legend_below(fig, handles, [h.get_label() for h in handles], 7, handlelength=2.6, columnspacing=1.2)
+        fig.tight_layout(rect=(0, bottom, 1, 1))
         fig.savefig(os.path.join(figdir, "fig-tradeoff.pdf"))
         plt.close(fig)
         r01 = s[(s["method"] == "sinkhorn") & (np.isclose(s["reg"].astype(float), 0.1))]
         oc = s[s["method"] == "orcut"].set_index("graph")["time_edge_weighted_s"].astype(float)
         if len(r01):
             ratio = [float(t) / oc[g] for g, t in zip(r01["graph"], r01["time_edge_weighted_s"]) if g in oc]
-            O.put("EFiveSinkhornTenthSlowdownMedian", f_x(np.median(ratio)), "e5/sinkhorn: time(eps=0.1)/time(orcut), median")
+            if ratio:
+                O.put("EFiveSinkhornTenthSlowdownMedian", f_x(np.median(ratio)),
+                      "e5/sinkhorn: time(eps=0.1)/time(orcut), median")
             O.put("EFiveSinkhornTenthMaeMedian", f_sci(np.median(r01["mae_weighted"].astype(float))), "e5/sinkhorn: MAE at eps=0.1")
         rmin = s[(s["method"] == "sinkhorn")]["reg"].astype(float).min()
         rl = s[(s["method"] == "sinkhorn") & (np.isclose(s["reg"].astype(float), rmin))]
@@ -710,7 +760,7 @@ def block_e6(R, O: Out, figdir: str):
                     O.put("ESixExactWinsHard", f"{int(np.sum(np.array(gap) > 0))}/{len(gap)}", "e6: exact beats every proxy, mu >= 0.3")
             if "est_full_recompute_s" in ex:
                 r = ex["est_full_recompute_s"].astype(float) / ex["time_s"].astype(float)
-                O.put("ESixIncrementalSpeedupMedian", f_x(np.nanmedian(r)), "e6: est. full recomputation / incremental, median")
+                O.put("ESixIncrementalSpeedupMedian", f_x(nanstat(np.nanmedian, r)), "e6: est. full recomputation / incremental, median")
             if "check_mismatch" in ex:
                 O.put("ESixCheckMismatches", f_int(np.nansum(ex["check_mismatch"].astype(float))), "e6: incremental vs full mismatches")
             O.put("ESixLargestLfr", f_int(lfr["n_"].max()), "e6: largest LFR size")
@@ -719,20 +769,20 @@ def block_e6(R, O: Out, figdir: str):
                 O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
             import matplotlib.pyplot as plt
 
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(2.75, 1.75), squeeze=False, sharey=True)
+            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(FIG_W, 2.4), squeeze=False, sharey=True)
             for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
                 for meth, lab in methods:
                     ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()
-                    ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=3, lw=1, capsize=2,
-                                label=lab.replace("$", ""), ls="--" if meth == "louvain" else "-")
-                ax.set_xlabel(r"mixing $\mu$", fontsize=7)
-                ax.set_title(f"LFR, n = {n_}", fontsize=7)
-                ax.tick_params(labelsize=6)
+                    ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=4, lw=1.2, capsize=2.5,
+                                label=lab, ls="--" if meth == "louvain" else "-")
+                ax.set_xlabel(r"mixing $\mu$", fontsize=8)
+                ax.set_title(f"LFR, n = {f_int(n_).replace('{,}', ',')}", fontsize=8)
+                ax.tick_params(labelsize=7)
                 ax.grid(True, lw=0.3, alpha=0.5)
-            axes[0, 0].set_ylabel("NMI", fontsize=7)
+            axes[0, 0].set_ylabel("NMI", fontsize=8)
             h, l = axes[0, 0].get_legend_handles_labels()
-            fig.legend(h, l, loc="lower center", ncol=5, fontsize=5.5, frameon=False, handlelength=1.5, columnspacing=0.8)
-            fig.tight_layout(rect=(0, 0.1, 1, 1))
+            bottom = _legend_below(fig, h, l, 7, handlelength=2.2, columnspacing=1.5)
+            fig.tight_layout(rect=(0, bottom, 1, 1))
             fig.savefig(os.path.join(figdir, "fig-community.pdf"))
             plt.close(fig)
         real = c[~c["graph"].str.startswith("LFR") & ~c["graph"].str.startswith("PP")]
@@ -799,8 +849,8 @@ def block_e7(R, O: Out):
             lines.append(f"{pretty.get(meas, meas)} & {f_num(np.median(r), 2)} & {f_num(np.max(r), 2)}" + r" \\")
         O.table("measures", lines)
         nl = d[d["measure"] != "lazy"]["rel_lazy"].astype(float)
-        O.put("ESevenRelMax", f_x(np.nanmax(nl)), "e7/measures: max time relative to lazy")
-        O.put("ESevenRelMedian", f_x(np.nanmedian(nl)), "e7/measures: median time relative to lazy")
+        O.put("ESevenRelMax", f_x(nanstat(np.nanmax, nl)), "e7/measures: max time relative to lazy")
+        O.put("ESevenRelMedian", f_x(nanstat(np.nanmedian, nl)), "e7/measures: median time relative to lazy")
     except FileNotFoundError:
         O.missing.append("e7/measures.csv")
     try:
@@ -810,15 +860,15 @@ def block_e7(R, O: Out):
             r = sub["pot_est_total_1thread_s"].astype(float) / sub["est_total_1thread_s"].astype(float)
             kind, rr = cfg.split(" r=")
             label = ("uniform on $B_{%s}$" if kind == "ball" else "%s-step lazy walk") % rr
-            lines.append(f"{label} & {f_num(np.nanmedian(r), 2)} & {f_num(np.nanmin(r), 2)}--{f_num(np.nanmax(r), 2)}"
-                         f" & {f_sci(np.nanmax(sub['max_diff_vs_pot'].astype(float)))}"
-                         f" & {f_pct(np.nanmin(sub['certified_share'].astype(float)), 0)}" + r" \\")
+            lines.append(f"{label} & {f_num(nanstat(np.nanmedian, r), 2)} & {f_num(nanstat(np.nanmin, r), 2)}--{f_num(nanstat(np.nanmax, r), 2)}"
+                         f" & {f_sci(nanstat(np.nanmax, sub['max_diff_vs_pot'].astype(float)))}"
+                         f" & {f_pct(nanstat(np.nanmin, sub['certified_share'].astype(float)), 0)}" + r" \\")
         O.table("radius", lines)
-        O.put("ESevenCertifiedMin", f_pct(np.nanmin(d["certified_share"].astype(float)), 0), "e7/radius: min certified share")
+        O.put("ESevenCertifiedMin", f_pct(nanstat(np.nanmin, d["certified_share"].astype(float)), 0), "e7/radius: min certified share")
         r2 = d[d["config"] == "ball r=2"]
         if len(r2):
             rr = r2["pot_est_total_1thread_s"].astype(float) / r2["est_total_1thread_s"].astype(float)
-            O.put("ESevenBallTwoPotMedian", f_x(np.nanmedian(rr)), "e7/radius: POT/orcut, ball r=2, median")
+            O.put("ESevenBallTwoPotMedian", f_x(nanstat(np.nanmedian, rr)), "e7/radius: POT/orcut, ball r=2, median")
     except FileNotFoundError:
         O.missing.append("e7/radius.csv")
 
