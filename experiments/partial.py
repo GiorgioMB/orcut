@@ -71,6 +71,44 @@ def memory_available() -> Optional[float]:
     return max(0.0, MEM_SHARE * lim - rss)
 
 
+def _oom_kill_field(path: str) -> Optional[int]:
+    try:
+        for line in open(path):
+            k, _, v = line.partition(" ")
+            if k == "oom_kill" and v.strip().isdigit():
+                return int(v)
+    except OSError:
+        pass
+    return None
+
+
+def oom_kill_count() -> Optional[int]:
+    """Processes of this job killed by the out-of-memory killer so far: the ``oom_kill`` count of the
+    memory cgroup this process is in (cgroup v2: memory.events; v1: memory.oom_control), or of the
+    nearest ancestor that has one. None if the kernel does not say. A child process (GRC) that is
+    killed at the job's memory limit leaves its parent alive; comparing this count before and after
+    the child ran tells that kill from any other SIGKILL."""
+    try:
+        lines = open("/proc/self/cgroup").read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        hid, ctrls, path = (line.split(":", 2) + ["", ""])[:3]
+        if hid == "0" and ctrls == "":
+            root, name = "/sys/fs/cgroup", "memory.events"
+        elif "memory" in ctrls.split(","):
+            root, name = "/sys/fs/cgroup/memory", "memory.oom_control"
+        else:
+            continue
+        d = os.path.normpath(root + "/" + path.strip("/"))
+        while d.startswith(root):
+            v = _oom_kill_field(os.path.join(d, name))
+            if v is not None:
+                return v
+            d = os.path.dirname(d)
+    return None
+
+
 def time_limit() -> Optional[float]:
     """Seconds of this Slurm job's time limit, or None (not under Slurm, or unlimited)."""
     job = os.environ.get("SLURM_JOB_ID")
