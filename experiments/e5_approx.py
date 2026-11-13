@@ -23,9 +23,12 @@ shortest paths and its process pool). GRC runs in its own environment (``--grc-p
 $ORCUT_GRC_PYTHON). A GRC run has no time limit. On graphs above ``--grc-chunk-above`` edges, and
 wherever one call did not finish before, it runs in contiguous chunks of edges of about
 ``--grc-chunk`` seconds, each saved as soon as it is done (its time is then the sum over the chunks,
-in ``chunks`` of them); a single call killed by its job's memory limit is tried again only by a job
-with more memory. Several jobs can run this part at once (``main.py --worker K``): each GRC run is
-claimed by one of them, the others move on to the next.
+in ``chunks`` of them); a single call killed by its job's memory limit (the job's whole process, or
+only GRC's: "out of memory with ...") is tried again only by a job with more memory. GRC's ATD
+always builds the all-pairs table, about 48 n^2 bytes at its peak (``baselines.grc_atd_need``),
+and is skipped where that does not fit; ``--grc-atd-apsp array`` builds the same table in 16 n^2.
+Several jobs can run this part at once (``main.py --worker K``): each GRC run is claimed by one of
+them, the others move on to the next.
 
 Part ``sinkhorn``: time-accuracy trade-off on a stratified sample of edges (bins of d_i + d_j), on
 the local problems at idleness 1/2: entropic OT at regularization ``--regs`` against the exact value,
@@ -83,10 +86,19 @@ def part_whole(a):
         grc_left = []
         for meth, grc_method, _ in GRC_METHODS:
             r = rows.get(graph=name, method=meth)
-            # an ATD row skipped because its all-pairs distances did not fit runs when this job has the memory
+            # an ATD row skipped because its all-pairs distances did not fit runs when this job has the memory;
+            # so does one killed at the memory limit while building them another way (--grc-atd-apsp)
+            st0 = str((r or {}).get("status") or "")
             fits_now = r is not None and grc_ok and grc_method == "ATD" and \
-                str(r.get("status") or "").startswith("skipped: needs") and \
-                B.grc_atd_need(int(common.num(r, "n"))) <= (PT.memory_available() or 0)
+                (st0.startswith("skipped: needs") or
+                 (st0.startswith("out of memory") and str(r.get("apsp") or "grc") != a.grc_atd_apsp)) and \
+                B.grc_atd_need(int(common.num(r, "n")), a.grc_atd_apsp) <= (PT.memory_available() or 0)
+            if r is not None and grc_ok and grc_method == "ATD" and st0.startswith("skipped: needs") and not fits_now:
+                need = B.grc_atd_need(int(common.num(r, "n")), a.grc_atd_apsp)
+                if not abs(common.num(r, "need_bytes") - need) <= 1e-6 * need:  # skipped under another estimate
+                    rows.add(dict(r, status=B.grc_atd_skipped(need), need_bytes=need, apsp=a.grc_atd_apsp))
+                    log(f"E5 {name:16s} {meth:12s} {B.grc_atd_skipped(need)} (was: {st0[:40]})")
+                    r = rows.get(graph=name, method=meth)
             # a timeout of the old 2-hour limit, or a method it skipped, runs now (there is no limit any more);
             # so does a run given up by a job whose time or memory this one exceeds
             again = r is not None and grc_ok and (str(r.get("status") or "") in ("timeout", "skipped") or PT.retry_now(r))
@@ -170,7 +182,8 @@ def part_whole(a):
                 if chunked:
                     val, t, status, nch, ndone = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python,
                                                                state_dir, chunk_s=a.grc_chunk, budget_s=a.grc_budget,
-                                                               log=lambda msg: log(f"E5 {name:16s} {msg}"))
+                                                               log=lambda msg: log(f"E5 {name:16s} {msg}"),
+                                                               apsp=a.grc_atd_apsp)
                     extra = dict(chunks=nch, grc_budget_s=a.grc_budget)
                     if status == "partial":  # the budget ran out: scored on the edges done, time a lower bound
                         extra.update(grc_edges_done=ndone, time_lower_s=t, time_est_s=t * g.num_edges / max(1, ndone))
@@ -180,7 +193,11 @@ def part_whole(a):
                     extra = {k: v for k, v in gave.items() if k != "status"}
                 else:
                     grc_runs.begin((name, meth), "grc")
-                    val, t, status = B.grc(g, grc_method, 0.5, topk, a.threads, a.grc_python)
+                    val, t, status = B.grc(g, grc_method, 0.5, topk, a.threads, a.grc_python, apsp=a.grc_atd_apsp)
+                for k, v in B.grc_row_fields(status, g.num_nodes, a.grc_atd_apsp).items():
+                    extra.setdefault(k, v)  # what a job with more memory compares with (kept if given up before)
+                if grc_method == "ATD" and not (st == "gave_up" and not chunked):
+                    extra["apsp"] = a.grc_atd_apsp  # how its all-pairs table was built (empty: GRC's own, "grc")
             else:
                 val, t, status = None, float("nan"), "unavailable"
             row = dict(base, method=meth, target="idle 1/2", status=status, time_s=t, **extra)
@@ -387,6 +404,10 @@ def main():
     ap.add_argument("--grc-chunk-above", type=int, default=10**6,
                     help="part whole: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
                          "not finish before)")
+    ap.add_argument("--grc-atd-apsp", choices=["grc", "array"], default="grc",
+                    help="part whole: how GRC's ATD gets its all-pairs distances: grc (default) as GRC 0.6.1 builds "
+                         "them, from n^2 Python floats (about 48 n^2 bytes at peak); array: NetworKit's table taken as "
+                         "an array (about 16 n^2), the same distances without GRC's conversion (recorded in apsp)")
     ap.add_argument("--regs", nargs="+", type=float, default=[1.0, 0.3, 0.1, 0.03, 0.01])
     ap.add_argument("--per-bin", type=int, default=50)
     ap.add_argument("--budget", type=float, default=None, help="ignored: part sinkhorn has no time budget any more")
