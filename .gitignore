@@ -8,4 +8,5 @@ results/
 *.nbc
 results-quick/
 experiments/data/real/
-orcut-anonymous.zip
+anonymous.zip
+anonymous.zip.tmp

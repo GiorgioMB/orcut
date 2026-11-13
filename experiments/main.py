@@ -371,6 +371,10 @@ RULES = {
 }
 
 
+# E6 (downstream algorithms) is not part of the current paper: its steps run only when named in
+# --steps. They stay in the step list, and in its order, so the indices of array.sbatch do not move.
+OPT_IN = ("e6-borf", "e6-community")
+
 MEMORY_STATUS = ("skipped: needs", "out of memory")  # rows that only a job with more memory can compute
 
 
@@ -509,10 +513,10 @@ def main(argv=None, steps=None) -> int:
         common.log("main.py " + " ".join(sys.argv[1:] if argv is None else argv))
     if a.list:
         for k, (cmd, desc) in table.items():
-            print(f"{k:14s} {' '.join(cmd):40s} {desc}")
+            print(f"{k:14s} {' '.join(cmd):40s} {desc}" + ("  (only when named in --steps)" if k in OPT_IN else ""))
         print(f"{'artifacts':14s} {'artifacts.py':40s} numbers, tables, figures of the paper")
         return 0
-    selected = a.steps or names
+    selected = a.steps or [s for s in names if s not in OPT_IN]
     bad = [s for s in selected if s not in names]
     if bad:
         ap.error(f"unknown steps: {bad}")

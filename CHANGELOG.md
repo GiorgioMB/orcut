@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.3.1
+
+The solver is unchanged from 1.3.0 (the same values); the changes are in the experiments, the
+paper's artifacts, and the tools.
+
+- GraphRicciCurvature's memory (`experiments/baselines.py`): its ATD needs about 48 n^2 bytes at
+  its peak for the all-pairs table it builds from n^2 Python floats (measured on the whole GRC
+  process tree), not 40 n^2, so a 300 GB job could start Epinions (n = 75,877) and be killed. The
+  estimate is now the measured one, and an ATD row skipped under the old estimate is rewritten
+  with the new one without loading the graph. `--grc-atd-apsp array` (E5) builds the same table as
+  NetworKit's array (`grc_runner.py --apsp-array`, about 16 n^2 bytes, the same values bit for bit;
+  recorded in the `apsp` column).
+- A GRC process killed by a signal used to leave an empty `error: ` (no stderr). The job's cgroup
+  OOM counter (`partial.oom_kill_count`) now tells a kill at the memory limit, recorded as
+  `out of memory with <job's> GB` and retried only by a job with more memory, from other signals
+  and exit codes, which are named in the status.
+- `experiments/main.py`: a step that completed with rows skipped for memory (or killed at the memory
+  limit) runs again, for these rows, in a job with more memory than the one that completed it; the
+  step records the job's memory. E6 is not part of the current paper: its steps (`e6-borf`,
+  `e6-community`) run only when named in `--steps`, and `array.sbatch` skips tasks 10 and 11 unless
+  asked; the step list and its indices are unchanged.
+- `experiments/artifacts.py`: no SyntaxWarning (a raw docstring) and no All-NaN warnings (NaN-aware
+  statistics of empty columns give NaN quietly; the numbers are unchanged); figure legends get as
+  many columns as fit and the room they need; figures are drawn at the width they are printed at
+  (`FIG_W`, and `COMMUNITY_W` for the half-width community figure); the trade-off figure shows the
+  regularization by marker and gives every graph its own colour; the table of graphs with metadata
+  labels adds the modularity of the returned partition and its number of groups.
+- `tools/anonymize.py`: the earlier paper's current title and arXiv identifier, third-person wording
+  ("an earlier paper"), no venue labels or pointer to this paper's preprint, no sentence naming the
+  package on PyPI; the copy is also checked for paths under a user's folder and for links that
+  would point to the placeholder; `--show` prints every changed line.
+- Tests: the classification of killed GRC runs, the cgroup counter, the ATD estimate on a graph of
+  Epinions' size, the reruns with more memory, and the paper's new results checked numerically
+  (`tests/test_theory.py`: the matching identity, the min-max formula, and the bound on Dinic's
+  phases on every kind of network the solver builds; the full checks are `tools/check_formulas.py`
+  and `tools/check_phases.py`).
+
 ## 1.3.0
 
 The version of the arXiv paper. The solver is unchanged from 1.2.0 (the same values); the changes

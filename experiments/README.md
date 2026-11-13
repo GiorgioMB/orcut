@@ -1,18 +1,19 @@
 # Experiments of the orcut paper
 
-Seven experiments, each answering one question a reader of the paper will ask. Every number,
-table and figure of the paper is produced by `artifacts.py` from the result tables written here;
-nothing is copied by hand.
+Seven experiments, each answering one question a reader of the paper will ask; six are in the
+current paper (E6 is not, and its steps run only when named in `--steps`). Every number, table and
+figure of the paper is produced by `artifacts.py` from the result tables written here; nothing is
+copied by hand.
 
-| | question | script | paper (LoG 2027 version) |
+| | question | script | paper |
 |---|---|---|---|
-| E1 | Is it exact, for every measure, and are the certificates valid? | `e1_exactness.py` | Sec. 6 (Exactness); Table 5 |
-| E2 | What does one edge cost, as a function of its neighbourhoods? Lower-bound instances? | `e2_per_edge.py --part A/B/C` | Sec. 6.1; Fig. 2, Table 1 (part C), Table 6, Fig. 4 |
-| E3 | Whole graphs: how large, how fast, how does it scale? | `e3_scale.py --part real/threads/synth` | Sec. 6.2; Tables 2, 4, 8, 9; Fig. 6 |
-| E4 | Which engineering step buys what? | `e4_ablation.py` | Sec. 6.2; Table 3 |
-| E5 | What do approximate pipelines get wrong, and at what cost? | `e5_approx.py --part whole/sinkhorn` | Sec. 6.3; Table 7; Fig. 5 |
-| E6 | Does it change what curvature-based algorithms can do? | `e6_downstream.py --part borf/community` | Sec. 6.3; Fig. 3; Tables 12, 13, 14 |
-| E7 | Other measures, balls and multi-step walks | `e7_generality.py --part measures/radius` | App. D; Tables 10, 11 |
+| E1 | Is it exact, for every measure, and are the certificates valid? | `e1_exactness.py` | Sec. 6.1; Table 5 |
+| E2 | What does one edge cost, as a function of its neighbourhoods? Lower-bound instances? | `e2_per_edge.py --part A/B/C` | Sec. 6.2; Figs. 2, 3; Tables 1 (part C), 6 |
+| E3 | Whole graphs: how large, how fast, how does it scale? | `e3_scale.py --part real/threads/synth` | Sec. 6.3; Tables 2, 4, 8, 9; Fig. 5 |
+| E4 | Which engineering step buys what? | `e4_ablation.py` | Sec. 6.3; Table 3 |
+| E5 | What do approximate pipelines get wrong, and at what cost? | `e5_approx.py --part whole/sinkhorn` | Sec. 6.4; Table 7; Fig. 4 |
+| E6 | Does it change what curvature-based algorithms can do? | `e6_downstream.py --part borf/community` | not in the current paper |
+| E7 | Other measures, balls and multi-step walks | `e7_generality.py --part measures/radius` | App. D (as E6); Tables 10, 11 |
 
 ## Environments (no package index needed)
 
@@ -48,7 +49,7 @@ Without it, the GRC rows are reported as `unavailable` and everything else runs.
 python experiments/main.py --list                              # steps
 bash experiments/slurm/quick.sh 4                              # whole pipeline at toy size (~5 min)
 sbatch experiments/slurm/run_all.sbatch                        # everything on one 32-core node
-sbatch experiments/slurm/array.sbatch                          # or one step per node, then:
+sbatch experiments/slurm/array.sbatch                          # or one step per node (E6: --array=10,11), then:
 python experiments/main.py --steps artifacts --paper-dir ../paper/generated
 python experiments/main.py --status                            # what is done, failed or running
 ```
@@ -58,8 +59,12 @@ python experiments/main.py --status                            # what is done, f
 * *Steps.* A step that ends without errors is recorded in `results/status/<step>.json` and is not
   run again (`--force` computes it again from scratch, e.g. `--steps e2-real --force`). A step that failed, was
   killed, or left rows that ended in an error runs again. `artifacts` runs again when the result
-  tables changed since its last run; E5 (whole) and E6 (BORF), when completed without
-  GraphRicciCurvature, run again once it is available (`--grc-python`, `ORCUT_GRC_PYTHON`).
+  tables changed since its last run (after changing `artifacts.py` itself, run it directly:
+  `python experiments/artifacts.py --results results --paper-dir ../paper/generated`); E5 (whole)
+  and E6 (BORF), when completed without GraphRicciCurvature, run again once it is available
+  (`--grc-python`, `ORCUT_GRC_PYTHON`); and a step whose tables hold rows skipped for memory, or
+  killed at the memory limit, runs again (for these rows) in a job with more memory than the one
+  that completed it.
 * *Rows.* Every step saves each result row as soon as it is computed and skips the rows already in
   its tables; a graph whose rows are all there is not loaded. Rows that hold no result
   (status `error: ...` or `unavailable`) are computed again, and a step that ends with error rows
@@ -125,15 +130,18 @@ distances, by `Certificate.verify`.
 
 **GRC.** Run end to end as a user would (its shortest paths, process pool and defaults:
 `alpha = 0.5`, `OTDSinkhornMix`, `nbr_topk = 3000`), with no time limit;
-all-pairs shortest paths up to 2 x 10^4 vertices (GRC materializes them as n^2 Python floats),
-pairwise beyond. When its default method times out on a graph, the other GRC methods are skipped.
+all-pairs shortest paths up to 2 x 10^4 vertices (GRC materializes them as n^2 Python floats,
+about 48 n^2 bytes at the peak), pairwise beyond. ATD always reads all pairs: it is skipped where
+they do not fit in the job's memory, or `--grc-atd-apsp array` builds the same table as an array
+(about 16 n^2 bytes; recorded in the `apsp` column). A GRC process killed at the job's memory limit
+is recorded as `out of memory with <job's> GB` and tried again only by a job with more memory. When its default method times out on a graph, the other GRC methods are skipped.
 The exact reference at idleness 1/2 equals half the Lin--Lu--Yau curvature on every edge (Bourne et
 al., 2018; checked in `tests/test_certify.py`).
 
-**Incremental updates (E6).** After a batch of edge insertions and deletions, only the edges with
-an endpoint in the union of N[a] u N[b] over the changed pairs can change curvature
-(`orcut.affected_edges`, proof in its docstring and in the paper); the experiments recompute these
-and compare with a full recomputation at regular intervals (`check_mismatch`, expected 0).
+**Incremental updates.** After a batch of edge insertions and deletions, only the edges with an
+endpoint in the union of N[a] u N[b] over the changed pairs can change curvature
+(`orcut.affected_edges`, proof in its docstring and in the paper); `tests/test_dynamic.py` checks
+this against full recomputation, and E6 does so along its runs (`check_mismatch`, expected 0).
 
 **Budgets.** Every baseline that can run for days has a budget (seconds per step, recorded in the
 tables), after which it is reported as not finished rather than extrapolated, except for the POT

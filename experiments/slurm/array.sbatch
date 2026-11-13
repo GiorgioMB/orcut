@@ -1,6 +1,7 @@
 #!/bin/bash
 # The experiments as a job array, one step per task (independent; run the artifacts afterwards):
-#   sbatch experiments/slurm/array.sbatch                                     # every step
+#   sbatch experiments/slurm/array.sbatch                                     # every step of the paper
+#   sbatch --array=10,11 experiments/slurm/array.sbatch                       # E6 (not in the paper)
 #   sbatch --array=8,10 experiments/slurm/array.sbatch --force               # options after the script go to main.py
 #   sbatch --array=9 experiments/slurm/array.sbatch --force -- --budget 3600 # and those after -- to the step
 #   python experiments/main.py --steps artifacts --out results               # when all tasks are done
@@ -17,7 +18,7 @@
 #              stop at once if GraphRicciCurvature does not import there.
 # ORCUT_DATA and ORCUT_RESULTS as in run_all.sbatch; ORCUT_ROOT sets the repository.
 #SBATCH --job-name=orcut-step
-#SBATCH --array=0-13
+#SBATCH --array=0-9,12,13   # 10, 11: E6, not part of the current paper (ask for them with --array)
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00

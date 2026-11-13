@@ -36,6 +36,10 @@ pytest -q
 ```
 
 ## Versions
+* **1.3.1**: the solver is unchanged (the same values); fixes to the experiments: GraphRicciCurvature's
+  memory is estimated from measurements, a GRC run killed at the memory limit is reported as such
+  and retried by a job with more memory, the paper's figures and tables are drawn at their printed
+  size, and E6 runs only when asked. See CHANGELOG.md.
 * **1.3.0** (the version of the arXiv paper): the solver is unchanged; the experiments resume
   from wherever a job was stopped (checkpoints per step, per row and inside rows), run without time
   budgets, and find their environments on SLURM. See CHANGELOG.md.

@@ -646,3 +646,15 @@ def test_rows_left_for_more_memory_are_found_in_every_kind_of_table(tmp_path):
     (out / "e5" / "sinkhorn.csv").write_text("graph,method,skipped_memory\nA,pot,0\nB,pot,3\nC,sinkhorn,\n")
     assert M._memory_gated("e2-controlled", str(out)) == 2 and M._memory_gated("e5-sinkhorn", str(out)) == 1
     assert M._memory_gated("e5-whole", str(out)) == 0
+
+
+def test_opt_in_steps_run_only_when_named(fake, monkeypatch):
+    """E6 is not part of the current paper: a run without --steps leaves its steps out (and the
+    artifacts step, which has nothing to build here, fails without stopping the others)."""
+    assert set(M.OPT_IN) == {"e6-borf", "e6-community"} and set(M.OPT_IN) <= set(M.STEPS)
+    run, calls, out = fake
+    monkeypatch.setattr(M, "OPT_IN", ("s2",))
+    run()
+    assert "s2" not in calls() and "s1" in calls()
+    assert run("--steps", "s2") == 0
+    assert calls()[-1] == "s2"

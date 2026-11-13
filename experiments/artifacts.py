@@ -208,6 +208,7 @@ E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut, no witness rela
               ("oracle", "previous solver", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
 FIG_W = 5.5  # text width of the paper (inches): figures are drawn at the width they are printed at
+COMMUNITY_W = 0.5 * FIG_W  # fig-community is printed in a half-width minipage beside its caption
 
 
 def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
@@ -769,30 +770,41 @@ def block_e6(R, O: Out, figdir: str):
                 O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
             import matplotlib.pyplot as plt
 
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(FIG_W, 2.4), squeeze=False, sharey=True)
+            # drawn at its printed width (COMMUNITY_W), so that its 6-7 pt fonts print at that size
+            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(COMMUNITY_W, 2.15), squeeze=False, sharey=True)
             for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
                 for meth, lab in methods:
                     ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()
-                    ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=4, lw=1.2, capsize=2.5,
-                                label=lab, ls="--" if meth == "louvain" else "-")
-                ax.set_xlabel(r"mixing $\mu$", fontsize=8)
-                ax.set_title(f"LFR, n = {f_int(n_).replace('{,}', ',')}", fontsize=8)
-                ax.tick_params(labelsize=7)
+                    ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=2.6, lw=0.9, capsize=1.5,
+                                elinewidth=0.7, label=lab, ls="--" if meth == "louvain" else "-")
+                ax.set_xlabel(r"mixing $\mu$", fontsize=7, labelpad=1)
+                ax.set_title(f"LFR, n = {f_int(n_).replace('{,}', ',')}", fontsize=7, pad=3)
+                ax.tick_params(labelsize=6, length=2, pad=1.5)
+                ax.set_xticks([0.1, 0.3, 0.5])
                 ax.grid(True, lw=0.3, alpha=0.5)
-            axes[0, 0].set_ylabel("NMI", fontsize=8)
+            axes[0, 0].set_ylabel("NMI", fontsize=7, labelpad=1)
             h, l = axes[0, 0].get_legend_handles_labels()
-            bottom = _legend_below(fig, h, l, 7, handlelength=2.2, columnspacing=1.5)
+            bottom = _legend_below(fig, h, l, 6.5, handlelength=2.0, columnspacing=1.0, handletextpad=0.4)
             fig.tight_layout(rect=(0, bottom, 1, 1))
             fig.savefig(os.path.join(figdir, "fig-community.pdf"))
             plt.close(fig)
+        # graphs with metadata labels: agreement with the labels (NMI, ARI) and, for the same partition,
+        # the procedure's own objective (modularity) and its number of groups
         real = c[~c["graph"].str.startswith("LFR") & ~c["graph"].str.startswith("PP")]
         lines = []
+        metrics = (("NMI", "nmi", "{:.3f}"), ("ARI", "ari", "{:.3f}"), ("$Q$", "modularity", "{:.3f}"),
+                   ("groups", "communities", "{:.0f}"))
         for gname, sub in real.groupby("graph"):
-            cells = [tex_name(gname)]
-            for meth in ("exact", "bf", "jl", "af3", "louvain"):
-                x = sub[sub["method"] == meth]
-                cells.append(f"{float(x['nmi'].iloc[0]):.3f} / {float(x['ari'].iloc[0]):.3f}" if len(x) else "--")
-            lines.append(" & ".join(cells) + r" \\")
+            for r, (label, col, fmt) in enumerate(metrics):
+                cells = [tex_name(gname) if r == 0 else "", label]
+                for meth in ("exact", "bf", "jl", "af3", "louvain"):
+                    x = sub[sub["method"] == meth]
+                    v = float(x[col].iloc[0]) if len(x) and col in x and not np.isnan(float(x[col].iloc[0])) else None
+                    cells.append(fmt.format(v) if v is not None else "--")
+                lines.append(" & ".join(cells) + r" \\")
+            lines.append(r"\addlinespace")
+        if lines:
+            lines.pop()
         O.table("community-real", lines)
     except FileNotFoundError:
         O.missing.append("e6/community.csv")
