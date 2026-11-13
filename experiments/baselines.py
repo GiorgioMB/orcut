@@ -367,7 +367,7 @@ def grc_python(explicit: Optional[str] = None) -> Optional[str]:
 
 
 def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: Optional[str], state_dir: str,
-                chunk_s: float = 3600.0, log=None, budget_s: Optional[float] = None):
+                chunk_s: float = 3600.0, log=None, budget_s: Optional[float] = None, apsp: str = "grc"):
     """GraphRicciCurvature on all edges of ``g`` in contiguous chunks of edges (``grc`` with ``ids``),
     each saved to ``state_dir`` as soon as it is computed, so that a run stopped in the middle (time
     limit, node failure) resumes at the next chunk. The first chunk is small (1% of the edges, at
@@ -396,7 +396,8 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
         if budget_s is not None and done:
             size = min(size, max(500, int((budget_s - spent) * done / max(spent, 1e-9))))
         lo, hi = done, min(m, done + max(1, size))
-        val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64))
+        val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64),
+                             apsp=apsp)
         if status != "ok":
             return None, float("nan"), status, len(state["chunks"]), done
         np.save(os.path.join(state_dir, f"{lo}.npy"), val)
@@ -413,19 +414,77 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
     return vals, float(sum(c[2] for c in state["chunks"])), ("ok" if done >= m else "partial"), len(state["chunks"]), done
 
 
-def grc_atd_need(n: int) -> float:
-    """Bytes GraphRicciCurvature needs for its all-pairs distances: it builds the n x n table from
-    n^2 Python floats before turning it into an array, about 40 n^2 bytes at the peak."""
-    return 40.0 * n * n
+GRC_APSP_BYTES = {"grc": 48.0, "array": 16.0}  # peak bytes per vertex pair of the all-pairs table (n^2)
+
+
+def grc_atd_need(n: int, apsp: str = "grc") -> float:
+    """Bytes GraphRicciCurvature's ATD needs at its peak, for its all-pairs distances (and 1 GiB for
+    the rest of the GRC process). GRC 0.6.1 (``apsp="grc"``) calls NetworKit's APSP and converts its
+    C++ table (8 n^2 bytes) to a list of lists of Python floats (40 n^2: 32-byte float objects and
+    8-byte pointers) before the table is freed, then to an array: 48 n^2 bytes at the peak, measured
+    with NetworKit 11.2 and Python 3.12 (the whole GRC process tree, n = 3000 to 6500): 258 GB for
+    Epinions, more than a 300 GB job plans for (partial.MEM_SHARE). ``apsp="array"``
+    (``grc_runner.py --apsp-array``) takes NetworKit's table as an array directly
+    (``getDistances(asarray=True)``): 16 n^2, the same distances."""
+    return GRC_APSP_BYTES[apsp] * n * n + 2.0**30
+
+
+def grc_atd_skipped(need: float) -> str:
+    """Status of an ATD row whose all-pairs table (``need`` bytes) does not fit in this job."""
+    import partial as PT
+
+    return (f"skipped: needs ~{need / 2**30:.0f} GB for the all-pairs distances of GRC's ATD, "
+            f"the job has {(PT.memory_limit() or 0) / 2**30:.0f} GB")
+
+
+def grc_row_fields(status: str, n: Optional[int] = None, apsp: str = "grc") -> dict:
+    """Columns that let a later job with more memory run a GRC row again (``partial.retry_now``):
+    the job's memory for a run killed at it, what it needs for an ATD row skipped for memory."""
+    import partial as PT
+
+    if status.startswith("out of memory"):
+        return {"mem_bytes": PT.memory_limit()}
+    if status.startswith("skipped: needs") and n is not None:
+        return {"need_bytes": grc_atd_need(n, apsp)}
+    return {}
+
+
+def _grc_failure(rc: int, err: str, oom_before: Optional[int]) -> str:
+    """Status of a GRC process that ended with exit code ``rc``. Killed by the out-of-memory killer
+    (the job's cgroup counted a kill meanwhile; or SIGKILL, where the kernel does not say: the parent
+    is alive, so neither Slurm's time limit nor scancel sent it): "out of memory with <job's> GB",
+    which only a job with more memory runs again. Otherwise "error: ..." with the exit code or
+    signal, and the end of its stderr (empty when a signal killed it)."""
+    import partial as PT
+
+    tail = (err or "").strip()[-400:].replace("\n", " | ")
+    if rc < 0:
+        try:
+            sig = signal.Signals(-rc).name
+        except ValueError:
+            sig = f"signal {-rc}"
+        oom_after = PT.oom_kill_count()
+        if oom_before is not None and oom_after is not None:
+            oom = oom_after > oom_before
+        else:
+            oom = -rc == signal.SIGKILL
+        if oom:
+            return f"out of memory with {(PT.memory_limit() or 0) / 2**30:.0f} GB (more --mem runs it again)"
+        return f"error: killed by {sig}" + (f": {tail}" if tail else "")
+    return f"error: exit {rc}" + (f": {tail}" if tail else "")
 
 
 def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3000, proc: int = 1,
         python: Optional[str] = None, timeout: Optional[float] = None, ids: Optional[np.ndarray] = None,
-        shortest_path: str = "auto", workdir: Optional[str] = None):
+        shortest_path: str = "auto", workdir: Optional[str] = None, apsp: str = "grc"):
     """GraphRicciCurvature on graph ``g`` (all edges, or ``ids``) through ``grc_runner.py`` in its own
     environment. Returns (values aligned with g.edges[ids], wall seconds, status) with status "ok",
-    "timeout", "unavailable" or "error: ..."; values is None unless status is "ok". On timeout the
-    whole process group (GRC's worker pool included) is killed."""
+    "timeout", "unavailable", "skipped: needs ..." (ATD whose all-pairs table does not fit in the
+    job's memory), "out of memory with ..." (killed at the job's memory limit) or "error: ...";
+    values is None unless status is "ok". On timeout the whole process group (GRC's worker pool
+    included) is killed. ``apsp`` (ATD only): how the all-pairs table is built (``grc_atd_need``)."""
+    import partial as PT
+
     py = grc_python(python)
     if py is None:
         return None, float("nan"), "unavailable"
@@ -433,12 +492,9 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
         # GraphRicciCurvature's ATD always reads the all-pairs distance table, which its pairwise mode
         # (the runner's choice above 20000 vertices) never builds: it then fails with a KeyError on the
         # first vertex. Give it all pairs, when they fit in the job's memory.
-        import partial as PT
-
-        need, avail = grc_atd_need(g.num_nodes), PT.memory_available()
+        need, avail = grc_atd_need(g.num_nodes, apsp), PT.memory_available()
         if avail is not None and need > avail:
-            return None, float("nan"), (f"skipped: needs ~{need / 2**30:.0f} GB for the all-pairs distances of GRC's "
-                                        f"ATD, the job has {(PT.memory_limit() or 0) / 2**30:.0f} GB")
+            return None, float("nan"), grc_atd_skipped(need)
         shortest_path = "all_pairs"
     with tempfile.TemporaryDirectory(dir=workdir, prefix="grc_") as d:
         np.savez(os.path.join(d, "in.npz"), n=g.num_nodes, edges=g.edges)
@@ -447,6 +503,9 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
         if ids is not None:
             np.save(os.path.join(d, "ids.npy"), np.asarray(ids, np.int64))
             cmd += ["--ids", os.path.join(d, "ids.npy")]
+        if method == "ATD" and apsp == "array":
+            cmd += ["--apsp-array"]
+        oom_before = PT.oom_kill_count()
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
             _, err = p.communicate(timeout=timeout)
@@ -457,8 +516,8 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
                 pass
             p.communicate()
             return None, float("nan"), "timeout"
-        if p.returncode != 0:
-            return None, float("nan"), "error: " + (err or "")[-400:].replace("\n", " | ")
+        if p.returncode != 0:  # a signal leaves no stderr: say which, and whether it was the memory limit
+            return None, float("nan"), _grc_failure(p.returncode, err, oom_before)
         z = np.load(os.path.join(d, "out.npz"))
         return np.asarray(z["curvature"], np.float64), float(z["time_s"]), "ok"
 
