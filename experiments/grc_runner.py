@@ -13,7 +13,7 @@ neighbours), ``shortest_path = "all_pairs"`` (an n x n float64 matrix).
 
 Usage (in the GRC environment):
   python grc_runner.py IN.npz OUT.npz [--alpha 0.5] [--method OTDSinkhornMix] [--nbr-topk 3000]
-                       [--proc 32] [--shortest-path auto|all_pairs|pairwise] [--ids IDS.npy]
+                       [--proc 32] [--shortest-path auto|all_pairs|pairwise] [--ids IDS.npy] [--apsp-array]
 """
 from __future__ import annotations
 
@@ -36,13 +36,24 @@ def main():
     ap.add_argument("--proc", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--shortest-path", default="auto", choices=["auto", "all_pairs", "pairwise"])
     ap.add_argument("--apsp-max-nodes", type=int, default=20_000,
-                    help="with auto: all_pairs up to this many vertices, pairwise beyond (GRC builds the n x n matrix from n^2 Python floats, about 40 n^2 bytes at peak)")
+                    help="with auto: all_pairs up to this many vertices, pairwise beyond (GRC builds the n x n "
+                         "matrix from n^2 Python floats, about 48 n^2 bytes at peak)")
     ap.add_argument("--ids", default=None, help=".npy of edge ids (rows of edges) to compute; default all")
+    ap.add_argument("--apsp-array", action="store_true",
+                    help="all_pairs: take NetworKit's distance table as an array (getDistances(asarray=True), about "
+                         "16 n^2 bytes at peak) instead of GRC's list of n^2 Python floats (about 48 n^2); the same "
+                         "distances, without GRC's conversion")
     a = ap.parse_args()
 
     import networkx as nx
     import GraphRicciCurvature
+    import GraphRicciCurvature.OllivierRicci as ORC
     from GraphRicciCurvature.OllivierRicci import OllivierRicci
+
+    if a.apsp_array:  # GRC calls this module-level function once per run, for its global table _apsp
+        import networkit as nk
+
+        ORC._get_all_pairs_shortest_path = lambda: nk.distance.APSP(ORC._Gk).run().getDistances(asarray=True)
 
     z = np.load(a.inp)
     n = int(z["n"])
@@ -65,7 +76,8 @@ def main():
     val = np.array([res[(u, v)] if (u, v) in res else res[(v, u)] for u, v in edge_list], dtype=np.float64)
     tmp = a.out + ".tmp.npz"
     np.savez(tmp, curvature=val, ids=ids, time_s=dt, alpha=a.alpha, method=a.method, nbr_topk=a.nbr_topk,
-             shortest_path=sp, proc=a.proc, grc_version=getattr(GraphRicciCurvature, "__version__", "?"))
+             shortest_path=sp, proc=a.proc, grc_version=getattr(GraphRicciCurvature, "__version__", "?"),
+             apsp="array" if a.apsp_array else "grc")
     os.replace(tmp, a.out)
     print(f"GRC {a.method} alpha={a.alpha} topk={a.nbr_topk} sp={sp} proc={a.proc}: {len(ids)} edges in {dt:.2f}s",
           file=sys.stderr)
