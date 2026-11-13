@@ -269,3 +269,122 @@ def test_workers_share_the_chunks_of_one_row(tmp_path):
     with pytest.raises(CK.Busy):  # nobody else writes the row meanwhile
         CK.StepLock(claims, "row.row").acquire()
     finish.release()
+
+
+# ------------------------------------------- GRC killed at the memory limit (only its process)
+
+def _fake_open(files):
+    """open() that serves ``files`` (path -> text) and raises OSError for any other path."""
+    import io
+
+    def fake(path, *a, **kw):
+        if path in files:
+            return io.StringIO(files[path])
+        raise OSError(path)
+    return fake
+
+
+def test_oom_kill_count_reads_the_cgroup_of_the_job(monkeypatch):
+    v2 = "/sys/fs/cgroup/system.slice/slurmstepd.scope/job_7/step_batch/user/task_0"
+    monkeypatch.setattr(PT, "open", _fake_open({
+        "/proc/self/cgroup": "0::/system.slice/slurmstepd.scope/job_7/step_batch/user/task_0\n",
+        f"{v2}/memory.events": "low 0\nhigh 0\nmax 12\noom 2\noom_kill 2\noom_group_kill 0\n"}), raising=False)
+    assert PT.oom_kill_count() == 2
+    # cgroup v1: only the job's level has the file, the step's does not; the unified line has nothing
+    monkeypatch.setattr(PT, "open", _fake_open({
+        "/proc/self/cgroup": "12:memory:/slurm/uid_1/job_7/step_batch\n4:cpu,cpuacct:/slurm/uid_1/job_7\n0::/\n",
+        "/sys/fs/cgroup/memory/slurm/uid_1/job_7/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\noom_kill 3\n"}),
+        raising=False)
+    assert PT.oom_kill_count() == 3
+    monkeypatch.setattr(PT, "open", _fake_open({"/proc/self/cgroup": "0::/\n"}), raising=False)
+    assert PT.oom_kill_count() is None
+
+
+def _script(path, body):
+    path.write_text("#!/bin/sh\n" + body + "\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_grc_killed_by_a_signal_says_so_instead_of_an_empty_error(tmp_path, monkeypatch):
+    """GRC's own process killed at the job's memory limit leaves no stderr and its parent alive; the row
+    says "out of memory with <job's> GB", which only a job with more memory runs again."""
+    import baselines as B
+    import datasets as D
+    g = D.to_graph(*D.synthetic("ER", 300, 6, 0))
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
+    kill9 = _script(tmp_path / "kill9", "kill -9 $$")
+    counts = iter([4, 5])  # the job's cgroup counted one OOM kill while GRC ran
+    monkeypatch.setattr(PT, "oom_kill_count", lambda: next(counts))
+    _, _, st = B.grc(g, "OTD", 0.5, 3000, 1, kill9, timeout=60)
+    assert st == "out of memory with 300 GB (more --mem runs it again)"
+    row = dict(status=st, **B.grc_row_fields(st, g.num_nodes))
+    assert row["mem_bytes"] == 300 * 2**30 and not common.row_failed(row) and not PT.retry_now(row)
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(320 * 1024))
+    assert PT.retry_now(row)  # resubmitted with --mem=320G
+    counts = iter([4, 4])  # SIGKILL from something else: an error, computed again
+    _, _, st = B.grc(g, "OTD", 0.5, 3000, 1, kill9, timeout=60)
+    assert st == "error: killed by SIGKILL"
+    monkeypatch.setattr(PT, "oom_kill_count", lambda: None)  # the kernel does not say: SIGKILL is the memory limit
+    assert B.grc(g, "OTD", 0.5, 3000, 1, kill9, timeout=60)[2].startswith("out of memory with 320 GB")
+    assert B.grc(g, "OTD", 0.5, 3000, 1, _script(tmp_path / "segv", "kill -11 $$"), timeout=60)[2] == \
+        "error: killed by SIGSEGV"
+    assert B.grc(g, "OTD", 0.5, 3000, 1, _script(tmp_path / "fails", "echo boom >&2; exit 1"), timeout=60)[2] == \
+        "error: exit 1: boom"
+
+
+def test_grc_atd_on_epinions_needs_more_than_a_300g_job(tmp_path, monkeypatch):
+    """GRC's ATD on a graph of Epinions' size (75,877 vertices) needs ~258 GB as GRC builds its
+    all-pairs table (48 n^2 bytes), which a 300 GB job does not plan for; 16 n^2 with --apsp-array."""
+    import baselines as B
+    import datasets as D
+    n = 75877
+    g = D.to_graph(n, np.stack([np.arange(n - 1), np.arange(1, n)], 1).astype(np.int64))  # a path
+    assert round(B.grc_atd_need(n) / 2**30) == 258 and round(B.grc_atd_need(n, "array") / 2**30) == 87
+    py = _script(tmp_path / "python", f'echo "$@" > {tmp_path / "argv"}; exit 1')
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
+    _, _, st = B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60)
+    assert st == "skipped: needs ~258 GB for the all-pairs distances of GRC's ATD, the job has 300 GB"
+    assert B.grc_row_fields(st, n)["need_bytes"] == B.grc_atd_need(n)
+    assert not (tmp_path / "argv").exists()  # nothing was started
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(320 * 1024))
+    assert B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60)[2] == "error: exit 1"
+    assert "--shortest-path all_pairs" in (tmp_path / "argv").read_text()
+    assert "--apsp-array" not in (tmp_path / "argv").read_text()
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(128 * 1024))  # the lean table fits in the 128 GB jobs
+    B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60, apsp="array")
+    assert "--apsp-array" in (tmp_path / "argv").read_text()
+    B.grc(g, "OTD", 0.5, 3000, 1, py, timeout=60, apsp="array")
+    assert "--apsp-array" not in (tmp_path / "argv").read_text()  # only ATD's table is built that way
+
+
+def test_e5_rewrites_an_atd_skip_made_under_the_old_estimate(tmp_path, monkeypatch):
+    """The row the 128 GB job left (needs ~214 GB: 40 n^2) is rewritten with the measured need, and no
+    graph is loaded or GRC run when it still does not fit."""
+    import argparse
+    import e5_approx as E5
+    import registry as R
+    monkeypatch.setattr(common, "_TABLES", [])
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
+    monkeypatch.setattr(R, "load", lambda *a, **k: pytest.fail("no graph should be loaded"))
+    out = tmp_path / "out"
+    t = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"])
+    base = dict(graph="Epinions", n=75877, m=405739, deg_max=3044, threads=32)
+    for meth in ["orcut", "bf", "af3", "jl", "bf@lly", "af3@lly", "jl@lly"]:
+        t.add(dict(base, method=meth))
+    for meth in ["grc-mix", "grc-otd", "grc-otd-full", "grc-sinkhorn"]:
+        t.add(dict(base, method=meth, status="ok"))
+    old = "skipped: needs ~214 GB for the all-pairs distances of GRC's ATD, the job has 128 GB"
+    t.add(dict(base, method="grc-atd", status=old))
+    py = _script(tmp_path / "python", "exit 1")
+    a = argparse.Namespace(out=str(out), graphs=["real:Epinions"], grc_python=py, grc_atd_apsp="grc", data_dir=None,
+                           threads=32, hub=1000, grc_chunk=3600.0, grc_budget=None, grc_chunk_above=10**6)
+    E5.part_whole(a)
+    r = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"]).get(graph="Epinions", method="grc-atd")
+    assert r["status"] == "skipped: needs ~258 GB for the all-pairs distances of GRC's ATD, the job has 300 GB"
+    assert float(r["need_bytes"]) == E5.B.grc_atd_need(75877) and r["apsp"] == "grc"
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(128 * 1024))  # a smaller job leaves the row as it is
+    monkeypatch.setattr(common, "_TABLES", [])
+    E5.part_whole(a)
+    r = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"]).get(graph="Epinions", method="grc-atd")
+    assert r["status"].endswith("the job has 300 GB")
