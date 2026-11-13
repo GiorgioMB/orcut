@@ -610,3 +610,39 @@ def test_workers_only_for_steps_that_share_work(fake):
         run("--steps", "s1", "--worker", "2")
     with pytest.raises(SystemExit):
         run("--steps", "e5-whole", "--worker", "2", "--force")
+
+
+def test_step_with_rows_skipped_for_memory_runs_again_in_a_job_with_more(fake, monkeypatch):
+    """e5-whole completed in a 128 GB job, which skipped a row for memory: a 300 GB job runs it again (the
+    step decides which rows fit), a job with no more memory does not, nor does a step without such rows."""
+    run, calls, out = fake
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(128 * 1024))
+    assert run("--steps", "e5-whole", "s1") == 0
+    assert CK.load(str(out), "e5-whole")["mem_bytes"] == 128 * 2**30
+    (out / "e5").mkdir()
+    (out / "e5" / "whole.csv").write_text(
+        "graph,method,status\nEpinions,grc-mix,ok\n"
+        "Epinions,grc-atd,\"skipped: needs ~258 GB for the all-pairs distances of GRC's ATD, the job has 128 GB\"\n")
+    assert run("--steps", "e5-whole", "s1") == 0
+    assert calls() == ["e5-whole", "s1"]  # the same memory: done
+    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
+    assert run("--steps", "e5-whole", "s1") == 0
+    assert calls() == ["e5-whole", "s1", "e5-whole"]  # more memory: e5-whole only (s1 has no such rows)
+    assert run("--steps", "e5-whole") == 0
+    assert calls() == ["e5-whole", "s1", "e5-whole"]  # recorded with 300 GB now
+    rec = CK.load(str(out), "e5-whole")
+    rec.pop("mem_bytes")  # a record of main.py before this rule
+    CK.save(str(out), "e5-whole", rec)
+    assert run("--steps", "e5-whole") == 0
+    assert calls()[-1] == "e5-whole" and len(calls()) == 4
+
+
+def test_rows_left_for_more_memory_are_found_in_every_kind_of_table(tmp_path):
+    out = tmp_path / "out"
+    (out / "e2").mkdir(parents=True)
+    (out / "e5").mkdir()
+    (out / "e2" / "controlled.csv").write_text("s,pot_status,highs_status\n1,,\n2,out of memory with 62 GB (more),\n"
+                                               "3,,skipped: needs ~9.0 GB\n")
+    (out / "e5" / "sinkhorn.csv").write_text("graph,method,skipped_memory\nA,pot,0\nB,pot,3\nC,sinkhorn,\n")
+    assert M._memory_gated("e2-controlled", str(out)) == 2 and M._memory_gated("e5-sinkhorn", str(out)) == 1
+    assert M._memory_gated("e5-whole", str(out)) == 0
