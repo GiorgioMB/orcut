@@ -1,4 +1,4 @@
-"""Run the experiments of the paper (E1--E7) and build its numbers, tables and figures.
+"""Run the experiments of the paper (E1--E6) and build its numbers, tables and figures.
 
 Every step is a separate process (a failure stops only that step) and logs to
 ``<out>/logs/<step>.log``. The same command can be run again after a time-out, a crash or an
@@ -48,6 +48,7 @@ import time
 import checkpoint as CK
 import common
 import partial as PT
+import xio
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -62,13 +63,16 @@ STEPS = {
     "e4": (["e4_ablation.py"], "ablation of the engineering steps"),
     "e5-whole": (["e5_approx.py", "--part", "whole"], "GraphRicciCurvature and proxies against exact values"),
     "e5-sinkhorn": (["e5_approx.py", "--part", "sinkhorn"], "entropic OT: time against error"),
-    "e6-borf": (["e6_downstream.py", "--part", "borf"], "BORF rewiring: full and incremental exact curvature"),
-    "e6-community": (["e6_downstream.py", "--part", "community"], "community detection by edge deletion"),
-    "e7-measures": (["e7_generality.py", "--part", "measures"], "other one-step measures"),
-    "e7-radius": (["e7_generality.py", "--part", "radius"], "balls and multi-step walks (layered closure)"),
+    "e6-measures": (["e6_generality.py", "--part", "measures"], "other one-step measures"),
+    "e6-radius": (["e6_generality.py", "--part", "radius"], "balls and multi-step walks (layered closure)"),
 }
-THREADED = {"e3-real", "e3-threads", "e3-synth", "e5-whole", "e6-borf", "e7-measures", "e7-radius"}
-GRC = {"e5-whole", "e6-borf"}
+THREADED = {"e3-real", "e3-threads", "e3-synth", "e5-whole", "e6-measures", "e6-radius"}
+GRC = {"e5-whole"}
+
+# 1.4.0 removed the downstream experiment (then E6) and renamed E7 to E6; results written before
+# are moved into place once (_rename_e7): the records of the renamed steps keep counting as done.
+RENAMED = {"e7-measures": "e6-measures", "e7-radius": "e6-radius"}
+RETIRED = ("e6-borf", "e6-community")
 HEARTBEAT_S = 60.0  # how often the lock of a running step is touched (CK.STALE_S: when it goes stale)
 
 
@@ -165,11 +169,8 @@ TABLE_KEYS = {
     "e4/ablation.csv": ["graph", "config"],
     "e5/whole.csv": ["graph", "method"],
     "e5/sinkhorn.csv": ["graph", "method", "reg"],
-    "e6/borf.csv": ["graph", "backend"],
-    "e6/borf_iterations.csv": ["graph", "backend", "iteration"],
-    "e6/community.csv": ["graph", "method"],
-    "e7/measures.csv": ["graph", "measure"],
-    "e7/radius.csv": ["graph", "config"],
+    "e6/measures.csv": ["graph", "measure"],
+    "e6/radius.csv": ["graph", "config"],
 }
 
 
@@ -186,10 +187,8 @@ STEP_OUTPUTS = {
     "e4": ["e4/ablation.csv"],
     "e5-whole": ["e5/whole.csv", "e5/values/*"],
     "e5-sinkhorn": ["e5/sinkhorn.csv"],
-    "e6-borf": ["e6/borf.csv", "e6/borf_iterations.csv"],
-    "e6-community": ["e6/community.csv"],
-    "e7-measures": ["e7/measures.csv"],
-    "e7-radius": ["e7/radius.csv"],
+    "e6-measures": ["e6/measures.csv"],
+    "e6-radius": ["e6/radius.csv"],
 }
 
 
@@ -239,9 +238,100 @@ def _move(src, dst):
         shutil.move(src, dst)
 
 
+def _rename_e7(out):
+    """Results written before 1.4.0, moved into place once: the tables of the downstream experiment
+    (then E6, in ``<out>/e6``), its records, locks and logs go to ``<out>/retired/1.3/``; then
+    ``<out>/e7`` becomes ``<out>/e6``, and the records and logs of e7-measures and e7-radius are
+    renamed, so a completed run stays done (its record holds options and rules, not the step's
+    name or script). A table in both places is merged row by row; of another file, the newer copy
+    is kept. Tasks of a job array that start together take turns. Returns the lines to log."""
+    e6, e7 = os.path.join(out, "e6"), os.path.join(out, "e7")
+    status, logs = CK.status_dir(out), os.path.join(out, "logs")
+    retired = os.path.join(out, "retired", "1.3")
+    old_files = ([os.path.join(status, f) for s in (*RETIRED, *RENAMED)
+                  for f in (f"{s}.json", f"{s}.lock") if os.path.exists(os.path.join(status, f))]
+                 + glob.glob(os.path.join(status, "e6-borf.*")) + glob.glob(os.path.join(status, "e6-community.*")))
+    legacy = xio.read_json(os.path.join(out, "status.json"), default={}) or {}
+    todo = os.path.isdir(e7) or bool(old_files) or any(k in legacy for k in (*RETIRED, *RENAMED)) or \
+        any(os.path.exists(os.path.join(e6, f)) for f in ("borf.csv", "borf_iterations.csv", "community.csv"))
+    if not todo:
+        return []
+    lock = CK.StepLock(out, "rename-e7")
+    deadline = time.time() + 1800
+    while True:
+        try:
+            lock.acquire()
+            break
+        except CK.Busy:
+            if time.time() > deadline:
+                raise
+            time.sleep(5)
+    msgs = []
+    try:
+        # 1. the downstream experiment's tables and partial work leave e6/ (everything there but
+        #    the tables of the renamed experiment, which a 1.4.0 run may already have written)
+        if os.path.isdir(e6):
+            for f in sorted(os.listdir(e6)):
+                if f not in ("measures.csv", "radius.csv"):
+                    _move(os.path.join(e6, f), os.path.join(retired, "e6", f))
+                    msgs.append(f"moved {os.path.join('e6', f)} (the downstream experiment of 1.3) to {retired}")
+        # 2. e7/ becomes e6/
+        if os.path.isdir(e7):
+            for src in sorted(glob.glob(os.path.join(e7, "**", "*"), recursive=True)):
+                if not os.path.isfile(src):
+                    continue
+                rel = os.path.relpath(src, e7)
+                dst = os.path.join(e6, rel)
+                if not os.path.exists(dst):
+                    _move(src, dst)
+                elif src.endswith(".csv"):
+                    src_newer = os.path.getmtime(src) > os.path.getmtime(dst)
+                    a_rows, b_rows = common.read_csv(dst), common.read_csv(src)
+                    older, newer = (a_rows, b_rows) if src_newer else (b_rows, a_rows)
+                    common.write_csv(_merge_rows(older, newer, TABLE_KEYS.get("e6/" + rel.replace(os.sep, "/"))), dst)
+                    os.remove(src)
+                elif os.path.getmtime(src) > os.path.getmtime(dst):
+                    _move(src, dst)
+                else:
+                    os.remove(src)
+            shutil.rmtree(e7, ignore_errors=True)
+            msgs.append("moved e7/ (E7 up to 1.3) to e6/")
+        # 3. records, locks and logs
+        for s in RETIRED:
+            for p in glob.glob(os.path.join(status, f"{s}.*")) + glob.glob(os.path.join(logs, f"{s}*.log")):
+                _move(p, os.path.join(retired, os.path.basename(os.path.dirname(p)), os.path.basename(p)))
+        for old, new in RENAMED.items():
+            rec = xio.read_json(os.path.join(status, f"{old}.json"), default=None)
+            if isinstance(rec, dict) and CK.load(out, new) is None:
+                rec = {k: v for k, v in rec.items() if k != "record"}
+                rec["step"] = new
+                CK.save(out, new, rec)
+                msgs.append(f"the record of {old} is now that of {new}")
+            for p in glob.glob(os.path.join(status, f"{old}.*")):
+                os.remove(p)
+            for p in glob.glob(os.path.join(logs, f"{old}*.log")):
+                dst = os.path.join(logs, os.path.basename(p).replace(old, new, 1))
+                if not os.path.exists(dst):
+                    _move(p, dst)
+        # 4. status.json: records of main.py up to v1.2.0 under the old names
+        if any(k in legacy for k in (*RETIRED, *RENAMED)):
+            for k in RETIRED:
+                legacy.pop(k, None)
+            for old, new in RENAMED.items():
+                if old in legacy:
+                    v = legacy.pop(old)
+                    legacy.setdefault(new, v)
+            xio.atomic_json(legacy, os.path.join(out, "status.json"))
+        CK.summary(out)
+    finally:
+        lock.release()
+    return msgs
+
+
 def _adopt_old_layout(out, data_dir):
     """Move into place what main.py up to v1.2.0 left in the wrong place (_old_place): every file
-    under experiments/<out>/e1..e7 goes to <out>/e1..e7; a table in both places is merged row by row
+    under experiments/<out>/e1..e7 goes to <out>/e1..e7 (e7 then becomes e6, _rename_e7); a table in
+    both places is merged row by row
     (_merge_rows, by TABLE_KEYS); another file in both places keeps the newer copy. Downloads in
     experiments/<data-dir> move to <data-dir> unless they are there already. Tasks of a job array
     that start together take turns (a lock in <out>/status). Returns the lines to log."""
@@ -361,19 +451,14 @@ WORKER_STEPS = {"e5-whole", "e3-real", "e3-synth"}  # e3: the chunks of a long r
 # Steps whose rules changed so that a completed run left rows the step computes now: a record
 # with an older (or no) number is not done, and the step runs again (for those rows only).
 RULES = {
-    "e7-radius": 2,      # 2: large supports run with fewer threads instead of being skipped
+    "e6-radius": 2,      # 2: large supports run with fewer threads instead of being skipped (as e7-radius)
     "e2-controlled": 2,  # 2: no time budget; POT and the LP solvers wherever they fit in the job's memory
     "e2-dasgupta": 2,    # 2: the same
     "e3-real": 2,        # 2: Skitter and LiveJournal get the non-lazy and LLY measures too
     "e5-sinkhorn": 2,    # 2: no time budget
     "e5-whole": 2,       # 2: GraphRicciCurvature without a time limit (its timeouts, and what they skipped, run)
-    "e6-borf": 2,        # 2: the same
 }
 
-
-# E6 (downstream algorithms) is not part of the current paper: its steps run only when named in
-# --steps. They stay in the step list, and in its order, so the indices of array.sbatch do not move.
-OPT_IN = ("e6-borf", "e6-community")
 
 MEMORY_STATUS = ("skipped: needs", "out of memory")  # rows that only a job with more memory can compute
 
@@ -513,10 +598,10 @@ def main(argv=None, steps=None) -> int:
         common.log("main.py " + " ".join(sys.argv[1:] if argv is None else argv))
     if a.list:
         for k, (cmd, desc) in table.items():
-            print(f"{k:14s} {' '.join(cmd):40s} {desc}" + ("  (only when named in --steps)" if k in OPT_IN else ""))
+            print(f"{k:14s} {' '.join(cmd):40s} {desc}")
         print(f"{'artifacts':14s} {'artifacts.py':40s} numbers, tables, figures of the paper")
         return 0
-    selected = a.steps or [s for s in names if s not in OPT_IN]
+    selected = a.steps or names
     bad = [s for s in selected if s not in names]
     if bad:
         ap.error(f"unknown steps: {bad}")
@@ -528,12 +613,12 @@ def main(argv=None, steps=None) -> int:
     # every step gets absolute paths (resolved against the directory main.py was started from)
     a.out, a.data_dir, a.paper_dir = _abspath(a.out), _abspath(a.data_dir), _abspath(a.paper_dir)
     a.grc_python, grc_src = _grc_python(a.grc_python)
+    if not a.ignore_old_layout:
+        for m in _adopt_old_layout(a.out, a.data_dir) + _rename_e7(a.out):
+            common.log(m)
     if a.status:
         print("\n".join(CK.table(a.out, names)))
         return 0
-    if not a.ignore_old_layout:
-        for m in _adopt_old_layout(a.out, a.data_dir):
-            common.log(m)
     other = [s for s in names if (r := CK.load(a.out, s)) is not None and CK.quick_of(r) != bool(a.quick)]
     if other:
         common.log(f"{a.out} holds steps of a {'full' if a.quick else '--quick'} run ({', '.join(other)}): their rows "

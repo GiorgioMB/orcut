@@ -41,7 +41,7 @@ def fake(tmp_path, monkeypatch):
     """A table of fake steps s1, s2 and e5-whole (a GRC step); returns (run, calls, out)."""
     script = tmp_path / "fake.py"
     script.write_text(FAKE)
-    steps = {s: ([str(script), s], "fake") for s in ("s1", "s2", "e5-whole", "e7-radius")}
+    steps = {s: ([str(script), s], "fake") for s in ("s1", "s2", "e5-whole", "e6-radius")}
     out = tmp_path / "out"
     monkeypatch.setattr(common, "environment", lambda: {"git": "abc"})
     monkeypatch.delenv("ORCUT_GRC_PYTHON", raising=False)
@@ -204,7 +204,7 @@ def test_status_lists_every_step(fake, capsys):
     assert run("--status") == 0
     lines = capsys.readouterr().out.splitlines()
     state = {ln.split()[0]: ln.split()[1] for ln in lines[1:]}
-    assert state == {"s1": "done", "s2": "failed", "e5-whole": "not", "e7-radius": "not", "artifacts": "not"}
+    assert state == {"s1": "done", "s2": "failed", "e5-whole": "not", "e6-radius": "not", "artifacts": "not"}
 
 
 # ---------------------------------------------------------------- locks
@@ -376,7 +376,7 @@ def test_rows_without_a_result_are_computed_again(tmp_path, monkeypatch):
 
 def test_radius_rows_skipped_for_size_run_again_when_they_fit(tmp_path, monkeypatch):
     import argparse
-    import e7_generality as E7
+    import e6_generality as E6
     monkeypatch.setattr(common, "_TABLES", [])
     t = common.Rows(str(tmp_path / "radius.csv"), ["graph", "config"])
     t.add(dict(graph="BA", config="ball r=3", max_support_pairs=22810160,
@@ -384,8 +384,8 @@ def test_radius_rows_skipped_for_size_run_again_when_they_fit(tmp_path, monkeypa
     t.add(dict(graph="BA", config="ball r=2", max_support_pairs=4000000, certified_share=1.0))
     t = common.Rows(str(tmp_path / "radius.csv"), ["graph", "config"])
     old, new = argparse.Namespace(max_pairs=5e6), argparse.Namespace(max_pairs=1.6e8)
-    assert E7.radius_done(t, "BA", "ball r=3", old) and not E7.radius_done(t, "BA", "ball r=3", new)
-    assert E7.radius_done(t, "BA", "ball r=2", new) and not E7.radius_done(t, "BA", "walk r=2", new)
+    assert E6.radius_done(t, "BA", "ball r=3", old) and not E6.radius_done(t, "BA", "ball r=3", new)
+    assert E6.radius_done(t, "BA", "ball r=2", new) and not E6.radius_done(t, "BA", "walk r=2", new)
 
 
 def test_grc_that_does_not_import_counts_as_unavailable(fake, tmp_path, monkeypatch, capsys):
@@ -416,14 +416,15 @@ def test_grc_environment_next_to_this_one_is_found(tmp_path, monkeypatch):
 
 
 def test_steps_completed_under_older_rules_run_again(fake):
-    """e7-radius recorded by main.py up to v1.2.0 (it skipped large supports) runs again, once."""
+    """e7-radius (now e6-radius) recorded by main.py up to v1.2.0, which skipped large supports, runs
+    again, once."""
     run, calls, out = fake
     out.mkdir()
     (out / "status.json").write_text(json.dumps({"e7-radius": {"returncode": 0, "seconds": 1.0, "finished": "x",
                                                               "quick": False}}))
-    assert run("--steps", "e7-radius") == 0
-    assert run("--steps", "e7-radius") == 0
-    assert calls() == ["e7-radius"] and CK.load(str(out), "e7-radius")["config"]["rules"] == M.RULES["e7-radius"]
+    assert run("--steps", "e6-radius") == 0
+    assert run("--steps", "e6-radius") == 0
+    assert calls() == ["e6-radius"] and CK.load(str(out), "e6-radius")["config"]["rules"] == M.RULES["e6-radius"]
 
 
 def _squeue(tmp_path, monkeypatch, out="", rc=0, err=""):
@@ -648,13 +649,26 @@ def test_rows_left_for_more_memory_are_found_in_every_kind_of_table(tmp_path):
     assert M._memory_gated("e5-whole", str(out)) == 0
 
 
-def test_opt_in_steps_run_only_when_named(fake, monkeypatch):
-    """E6 is not part of the current paper: a run without --steps leaves its steps out (and the
-    artifacts step, which has nothing to build here, fails without stopping the others)."""
-    assert set(M.OPT_IN) == {"e6-borf", "e6-community"} and set(M.OPT_IN) <= set(M.STEPS)
+def test_results_of_1_3_move_into_place(fake):
+    """1.4.0 removed the downstream experiment (then E6) and renamed E7 to E6: its results move to
+    retired/, e7/ becomes e6/, and a completed e7-radius stays done as e6-radius."""
     run, calls, out = fake
-    monkeypatch.setattr(M, "OPT_IN", ("s2",))
-    run()
-    assert "s2" not in calls() and "s1" in calls()
-    assert run("--steps", "s2") == 0
-    assert calls()[-1] == "s2"
+    assert run("--steps", "e6-radius") == 0
+    rec = CK.load(str(out), "e6-radius")
+    # what 1.3 left: E7's record and table under its old name, the downstream table in e6/
+    (out / "status" / "e6-radius.json").unlink()
+    CK.save(str(out), "e7-radius", {k: v for k, v in dict(rec, step="e7-radius").items() if k != "record"})
+    CK.save(str(out), "e6-community", {k: v for k, v in dict(rec, step="e6-community").items() if k != "record"})
+    (out / "e7").mkdir()
+    (out / "e7" / "radius.csv").write_text("graph,config\nBA,ball r=2\n")
+    (out / "e6").mkdir()
+    (out / "e6" / "community.csv").write_text("graph,method\nKarate,exact\n")
+    assert run("--steps", "e6-radius") == 0
+    assert calls() == ["e6-radius"]  # done before: not run again
+    assert (out / "e6" / "radius.csv").read_text().startswith("graph,config") and not (out / "e7").exists()
+    assert (out / "retired" / "1.3" / "e6" / "community.csv").exists() and not (out / "e6" / "community.csv").exists()
+    assert not (out / "status" / "e7-radius.json").exists() and not (out / "status" / "e6-community.json").exists()
+    assert CK.load(str(out), "e6-radius")["step"] == "e6-radius"
+    st = json.loads((out / "status.json").read_text())
+    assert "e6-radius" in st and "e7-radius" not in st and "e6-community" not in st
+    assert run("--steps", "e6-radius") == 0 and calls() == ["e6-radius"]  # and nothing left to move

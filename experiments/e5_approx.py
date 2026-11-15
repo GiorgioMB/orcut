@@ -1,8 +1,8 @@
 """E5. What approximate pipelines get wrong, and what they cost.
 
 Part ``whole``: on every graph, the exact curvature at idleness 1/2 (GraphRicciCurvature's default
-alpha = 0.5) and the non-lazy curvature (alpha = 0, as in BORF) are computed with orcut; against
-them we score
+alpha = 0.5) and the non-lazy curvature (alpha = 0, which the Jost--Liu mean estimates) are computed
+with orcut; against them we score
 
   grc-mix       GraphRicciCurvature 0.6.1 with its defaults (OTDSinkhornMix, nbr_topk = 3000,
                 ot.emd2 with numItermax = 100000), alpha = 0.5;

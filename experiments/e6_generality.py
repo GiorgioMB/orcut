@@ -1,4 +1,4 @@
-"""E7. Beyond the lazy walk: other one-step measures, balls and multi-step walks.
+"""E6. Beyond the lazy walk: other one-step measures, balls and multi-step walks.
 
 Part ``measures``: whole-graph time of orcut (``--threads`` threads, best of ``--reps``) for the
 lazy, non-lazy and Lin--Lu--Yau curvatures, uniform idleness p in {1/4, 1/2, 3/4}, and a weighted
@@ -12,7 +12,7 @@ in numba, the cheapest input we know how to build), on a stratified sample of ed
 of both (build included), largest difference of the values, and the share of the sample on which
 orcut's plan and potentials are verified exactly (``certify``).
 
-Usage: python e7_generality.py --part measures|radius [--graphs ...] [--threads 32] [--quick]
+Usage: python e6_generality.py --part measures|radius [--graphs ...] [--threads 32] [--quick]
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def part_measures(a):
     import orcut
     from orcut import _core as C
 
-    rows = Rows(f"{out_dir(a.out, 'e7')}/measures.csv", ["graph", "measure"])
+    rows = Rows(f"{out_dir(a.out, 'e6')}/measures.csv", ["graph", "measure"])
     graphs = a.graphs or ["bundled:arxiv", "real:Deezer", "real:Twitch-DE", "real:GitHub", "real:Amazon-Computers",
                           "real:Epinions", "real:DBLP", "real:YouTube", "synth:RGG:100000:20:0",
                           "synth:CL2.1:30000:12:0"]
@@ -76,7 +76,7 @@ def part_measures(a):
                        mean_arcs=float(d[:, C.D_ARCS].mean()),
                        share_cut=float(np.mean(np.isin(d[:, C.D_PATH], (C.PATH_CUT, C.PATH_CUTW, C.PATH_WIT)))))
             rows.add(row)
-            log(f"E7M {name:16s} {label:14s} {t:9.3f}s ({row['rel_lazy']:.2f} x lazy)")
+            log(f"E6M {name:16s} {label:14s} {t:9.3f}s ({row['rel_lazy']:.2f} x lazy)")
 
 
 # ---------------------------------------------------------------- part B
@@ -190,7 +190,7 @@ def part_radius(a):
     import numba
     import orcut
 
-    rows = Rows(f"{out_dir(a.out, 'e7')}/radius.csv", ["graph", "config"])
+    rows = Rows(f"{out_dir(a.out, 'e6')}/radius.csv", ["graph", "config"])
     graphs = a.graphs or ["bundled:power_grid", "bundled:yeast", "bundled:jazz", "synth:ER:5000:8:0",
                           "synth:RGG:5000:10:0", "synth:WS:5000:8:0", "synth:BA:5000:6:0", "synth:CL2.5:5000:6:0"]
     if a.quick:
@@ -214,7 +214,7 @@ def part_radius(a):
             if row["max_support_pairs"] > a.max_pairs:
                 row["status"] = f"skipped: supports up to {row['max_support_pairs']} pairs (> --max-pairs)"
                 rows.add(row)
-                log(f"E7R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs > --max-pairs)")
+                log(f"E6R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs > --max-pairs)")
                 continue
             # every thread holds the pairs of its edge: fewer threads for large supports, so that
             # all of them together hold at most --pairs-in-memory pairs (the memory of 32 threads
@@ -222,7 +222,7 @@ def part_radius(a):
             T = int(max(1, min(a.threads, a.pairs_in_memory // max(1, row["max_support_pairs"]))))
             row["threads"] = T
             if T < a.threads:
-                log(f"E7R {name:16s} {cfg:9s} supports up to {row['max_support_pairs']:,} pairs: {T} threads")
+                log(f"E6R {name:16s} {cfg:9s} supports up to {row['max_support_pairs']:,} pairs: {T} threads")
             f_all = (lambda ids=None: orcut.ball_curvature(g, r, edges=ids, n_jobs=T)) if kind == "ball" else \
                 (lambda ids=None: orcut.walk_curvature(g, r, edges=ids, n_jobs=T))
             ids_all = np.concatenate([s for _, s, _ in strata])
@@ -268,7 +268,7 @@ def part_radius(a):
                        pot_timed=int(np.isfinite(dall).sum()), sample=len(ids_all),
                        max_diff_vs_pot=float(np.nanmax(dall)) if np.isfinite(dall).any() else float("nan"))
             rows.add(row)
-            log(f"E7R {name:16s} {cfg:9s} orcut est {row['est_total_1thread_s']:9.2f}s POT est "
+            log(f"E6R {name:16s} {cfg:9s} orcut est {row['est_total_1thread_s']:9.2f}s POT est "
                 f"{row['pot_est_total_1thread_s']:9.2f}s (1 thread) max|diff| {row['max_diff_vs_pot']:.1e} "
                 f"certified {row['certified_share']:.3f}")
 

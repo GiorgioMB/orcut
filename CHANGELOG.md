@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.0
+
+The version of the arXiv paper. The solver is unchanged from 1.3.1 (the same values); the
+experiments are now numbered as in the paper.
+
+- The downstream experiment (E6 up to 1.3: BORF rewiring and community detection by edge deletion)
+  is removed, with what only it used: `e6_downstream.py`, `dynamic.py`, the GNN benchmarks (Cornell,
+  Texas, Wisconsin, Cora, Citeseer, PubMed, Chameleon, Actor, ogbn-arxiv) and their loaders (the
+  Geom-GCN, Planetoid and OGB formats, and the unpickler for Planetoid's files), the graphs with
+  ground-truth communities (LFR, planted partition, email-Eu-core, Karate's factions), and its
+  tables and figure in `artifacts.py`. `datasets.py` downloads the 20 real networks of the paper.
+- E7 is now E6: `e6_generality.py`, steps `e6-measures` and `e6-radius`, tables
+  `results/e6/{measures,radius}.csv`, keys `ESix...` (`ESixRelMax`, `ESixRelMedian`,
+  `ESixCertifiedMin`, `ESixBallTwoPotMedian`). In `array.sbatch`, `e6-measures` and `e6-radius`
+  are tasks 10 and 11 (`--array=0-11`); tasks 0 to 9 are unchanged.
+- Results of 1.3 move into place on the first run of `main.py` (also with `--status`): the
+  downstream tables, records, locks and logs go to `results/retired/1.3/`, `results/e7/` becomes
+  `results/e6/` (merged row by row with a table already there), and the records of `e7-measures`
+  and `e7-radius` become those of `e6-measures` and `e6-radius`, which stay done (their records hold
+  options and rules, not the step's name).
+- The opt-in steps of 1.3.1 (`OPT_IN`) are gone with the steps they concerned.
+
 ## 1.3.1
 
 The solver is unchanged from 1.3.0 (the same values); the changes are in the experiments, the
@@ -39,7 +61,7 @@ paper's artifacts, and the tools.
 
 ## 1.3.0
 
-The version of the arXiv paper. The solver is unchanged from 1.2.0 (the same values); the changes
+The solver is unchanged from 1.2.0 (the same values); the changes
 are in the experiments, which can now run for weeks on a cluster, be stopped at any point, and
 resume without losing or repeating work.
 

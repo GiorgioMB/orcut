@@ -214,30 +214,6 @@ def test_grc_in_saved_chunks_resumes_after_a_kill(tmp_path, monkeypatch):
     assert t == 2.0 * nch and nch == len(calls) - 1
 
 
-def test_borf_resumes_after_its_last_saved_iteration(tmp_path, monkeypatch):
-    import datasets as D
-    import e6_downstream as E6
-    import orcut
-    g = D.to_graph(*D.synthetic("BA", 300, 4, 0))
-    ref, _ = E6.borf(g, 4, 5, 3, threads=1)
-    ck = str(tmp_path / "b.npz")
-    real = orcut.certify
-    n = {"calls": 0}
-
-    def dies(*args, **kw):
-        n["calls"] += 1
-        if n["calls"] > 12:  # killed during the third iteration (5 plans per iteration)
-            raise KeyboardInterrupt
-        return real(*args, **kw)
-
-    monkeypatch.setattr(orcut, "certify", dies)
-    with pytest.raises(KeyboardInterrupt):
-        E6.borf(g, 4, 5, 3, threads=1, ckpt=ck)
-    monkeypatch.setattr(orcut, "certify", real)
-    got, recs = E6.borf(g, 4, 5, 3, threads=1, ckpt=ck)
-    assert np.array_equal(got.edges, ref.edges) and [r["iteration"] for r in recs] == [-1, 0, 1, 2, 3]
-
-
 def test_grc_reference_stops_at_its_budget_and_continues_with_a_larger_one(tmp_path, monkeypatch):
     import baselines as B
     import datasets as D

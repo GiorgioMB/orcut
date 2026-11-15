@@ -1,4 +1,4 @@
-"""Run GraphRicciCurvature (GRC) on one graph, as a user would; called by e5/e6 in the GRC environment.
+"""Run GraphRicciCurvature (GRC) on one graph, as a user would; called by E5 in the GRC environment.
 
 GRC 0.6.1 caps scipy <= 1.13.1, so it lives in its own environment (``grc-environment.yml``); this
 script imports neither orcut nor numba. Input: an ``.npz`` with ``n`` and ``edges`` (one row per

@@ -1,4 +1,4 @@
-"""Numbers, tables and figures of the paper, from the result tables of E1--E7.
+"""Numbers, tables and figures of the paper, from the result tables of E1--E6.
 
 Writes into ``--paper-dir`` (default ``results/paper``):
 
@@ -208,7 +208,6 @@ E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut, no witness rela
               ("oracle", "previous solver", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
 FIG_W = 5.5  # text width of the paper (inches): figures are drawn at the width they are printed at
-COMMUNITY_W = 0.5 * FIG_W  # fig-community is printed in a half-width minipage beside its caption
 
 
 def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
@@ -720,139 +719,9 @@ def block_e5(R, O: Out, figdir: str):
 
 # ------------------------------------------------------------------ E6
 
-def block_e6(R, O: Out, figdir: str):
+def block_e6(R, O: Out):
     try:
-        c = load(R, "e6/community.csv")
-        lfr = c[c["graph"].str.startswith("LFR")].copy()
-        if len(lfr):
-            lfr["n_"] = lfr["graph"].str.extract(r"LFR\((\d+)")[0].astype(int)
-            lfr["mu"] = lfr["graph"].str.extract(r"mu=([0-9.]+)")[0].astype(float)
-            methods = [("exact", "exact"), ("bf", "BF"), ("jl", "JL"), ("af3", "AF$_3$"), ("louvain", "Louvain")]
-            lines = []
-            for (n_, mu), sub in lfr.groupby(["n_", "mu"]):
-                cells = [f_int(n_), f"{mu:.1f}"]
-                vals = {}
-                for meth, _ in methods:
-                    x = sub[sub["method"] == meth]["nmi"].astype(float)
-                    vals[meth] = (x.mean(), x.std(ddof=1) if len(x) > 1 else float("nan"), len(x))
-                best = max(v[0] for k, v in vals.items() if k != "louvain" and math.isfinite(v[0]))
-                for meth, _ in methods:
-                    mval, sd, k = vals[meth]
-                    s_ = f"{mval:.3f}" if math.isfinite(mval) else "--"
-                    if meth != "louvain" and math.isfinite(mval) and abs(mval - best) < 1e-12:
-                        s_ = r"\textbf{" + s_ + "}"
-                    if math.isfinite(sd):
-                        s_ += rf"\,{{\scriptsize$\pm${sd:.3f}}}"
-                    cells.append(s_)
-                lines.append(" & ".join(cells) + r" \\")
-            O.table("community", lines)
-            ex = lfr[lfr["method"] == "exact"]
-            O.put("ESixLfrRuns", f_int(len(ex)), "e6/community: LFR runs per method")
-            hard = lfr[lfr["mu"] >= 0.3]
-            if len(hard):
-                gap = []
-                for (gname), sub in hard.groupby("graph"):
-                    e_ = sub[sub["method"] == "exact"]["nmi"]
-                    p_ = sub[sub["method"].isin(["bf", "jl", "af3"])]["nmi"]
-                    if len(e_) and len(p_):
-                        gap.append(float(e_.iloc[0]) - float(p_.max()))
-                if gap:
-                    O.put("ESixNmiGapHardMedian", f_num(np.median(gap), 2), "e6: median NMI(exact) - best proxy NMI, mu >= 0.3")
-                    O.put("ESixExactWinsHard", f"{int(np.sum(np.array(gap) > 0))}/{len(gap)}", "e6: exact beats every proxy, mu >= 0.3")
-            if "est_full_recompute_s" in ex:
-                r = ex["est_full_recompute_s"].astype(float) / ex["time_s"].astype(float)
-                O.put("ESixIncrementalSpeedupMedian", f_x(nanstat(np.nanmedian, r)), "e6: est. full recomputation / incremental, median")
-            if "check_mismatch" in ex:
-                O.put("ESixCheckMismatches", f_int(np.nansum(ex["check_mismatch"].astype(float))), "e6: incremental vs full mismatches")
-            O.put("ESixLargestLfr", f_int(lfr["n_"].max()), "e6: largest LFR size")
-            t_big = ex[lfr.loc[ex.index, "n_"] == lfr["n_"].max()]["time_s"].astype(float)
-            if len(t_big):
-                O.put("ESixLargestLfrTime", f_time(np.median(t_big)), "e6: median time of the exact run on the largest LFR")
-            import matplotlib.pyplot as plt
-
-            # drawn at its printed width (COMMUNITY_W), so that its 6-7 pt fonts print at that size
-            fig, axes = plt.subplots(1, lfr["n_"].nunique(), figsize=(COMMUNITY_W, 2.15), squeeze=False, sharey=True)
-            for ax, (n_, sub) in zip(axes[0], lfr.groupby("n_")):
-                for meth, lab in methods:
-                    ss = sub[sub["method"] == meth].groupby("mu")["nmi"].agg(["mean", "std"]).reset_index()
-                    ax.errorbar(ss["mu"], ss["mean"], yerr=ss["std"], marker="o", ms=2.6, lw=0.9, capsize=1.5,
-                                elinewidth=0.7, label=lab, ls="--" if meth == "louvain" else "-")
-                ax.set_xlabel(r"mixing $\mu$", fontsize=7, labelpad=1)
-                ax.set_title(f"LFR, n = {f_int(n_).replace('{,}', ',')}", fontsize=7, pad=3)
-                ax.tick_params(labelsize=6, length=2, pad=1.5)
-                ax.set_xticks([0.1, 0.3, 0.5])
-                ax.grid(True, lw=0.3, alpha=0.5)
-            axes[0, 0].set_ylabel("NMI", fontsize=7, labelpad=1)
-            h, l = axes[0, 0].get_legend_handles_labels()
-            bottom = _legend_below(fig, h, l, 6.5, handlelength=2.0, columnspacing=1.0, handletextpad=0.4)
-            fig.tight_layout(rect=(0, bottom, 1, 1))
-            fig.savefig(os.path.join(figdir, "fig-community.pdf"))
-            plt.close(fig)
-        # graphs with metadata labels: agreement with the labels (NMI, ARI) and, for the same partition,
-        # the procedure's own objective (modularity) and its number of groups
-        real = c[~c["graph"].str.startswith("LFR") & ~c["graph"].str.startswith("PP")]
-        lines = []
-        metrics = (("NMI", "nmi", "{:.3f}"), ("ARI", "ari", "{:.3f}"), ("$Q$", "modularity", "{:.3f}"),
-                   ("groups", "communities", "{:.0f}"))
-        for gname, sub in real.groupby("graph"):
-            for r, (label, col, fmt) in enumerate(metrics):
-                cells = [tex_name(gname) if r == 0 else "", label]
-                for meth in ("exact", "bf", "jl", "af3", "louvain"):
-                    x = sub[sub["method"] == meth]
-                    v = float(x[col].iloc[0]) if len(x) and col in x and not np.isnan(float(x[col].iloc[0])) else None
-                    cells.append(fmt.format(v) if v is not None else "--")
-                lines.append(" & ".join(cells) + r" \\")
-            lines.append(r"\addlinespace")
-        if lines:
-            lines.pop()
-        O.table("community-real", lines)
-    except FileNotFoundError:
-        O.missing.append("e6/community.csv")
-    try:
-        b = load(R, "e6/borf.csv")
-        lines = []
-        sp_grc, sp_inc = [], []
-        for gname, sub in b.groupby("graph", sort=False):
-            s_ = sub.set_index("backend")
-            def get(bk, col):
-                try:
-                    return float(s_.loc[bk, col])
-                except Exception:
-                    return float("nan")
-            grc = get("grc", "curv_per_iter_s")
-            full = get("orcut-full", "curv_per_iter_s")
-            inc = get("orcut-incremental", "curv_per_iter_s")
-            plan = get("orcut-incremental", "plan_per_iter_s")
-            aff = get("orcut-incremental", "affected_share")
-            m = get("orcut-full", "m")
-            status = str(s_.loc["grc", "status"]) if "grc" in s_.index and "status" in s_ else "ok"
-            lower = get("grc", "curv_lower_s")  # a partial reference: GRC's time so far, a lower bound
-            grc_cell = f_time(grc) if status == "ok" else (r"$>$" + f_time(lower) if status == "partial" and
-                                                          math.isfinite(lower) else r"\textit{" + status + "}")
-            lines.append(" & ".join([tex_name(gname), f_num(m), grc_cell,
-                                     f_time(full), f_time(inc), f_pct(aff, 0), f_time(plan)]) + r" \\")
-            if math.isfinite(grc) and math.isfinite(full) and full > 0:
-                sp_grc.append(grc / full)
-            if math.isfinite(inc) and math.isfinite(full) and inc > 0:
-                sp_inc.append(full / inc)
-        O.table("borf", lines)
-        if sp_grc:
-            O.put("ESixBorfGrcSpeedupMedian", f_x(np.median(sp_grc)), "e6/borf: GRC / orcut-full per iteration, median")
-            O.put("ESixBorfGrcSpeedupMax", f_x(np.max(sp_grc)), "e6/borf: GRC / orcut-full per iteration, max")
-        if sp_inc:
-            O.put("ESixBorfIncSpeedupMedian", f_x(np.median(sp_inc)), "e6/borf: full / incremental per iteration, median")
-        if "check_mismatch" in b:
-            O.put("ESixBorfMismatches", f_int(np.nansum(b["check_mismatch"].astype(float))), "e6/borf: mismatches")
-        O.put("ESixBorfGraphs", f_int(b["graph"].nunique()), "e6/borf: graphs")
-    except FileNotFoundError:
-        O.missing.append("e6/borf.csv")
-
-
-# ------------------------------------------------------------------ E7
-
-def block_e7(R, O: Out):
-    try:
-        d = load(R, "e7/measures.csv")
+        d = load(R, "e6/measures.csv")
         lines = []
         pretty = {"lazy": "lazy", "nonlazy": "non-lazy", "lly": "Lin--Lu--Yau", "idle 1/4": "idleness $1/4$",
                   "idle 1/2": "idleness $1/2$", "idle 3/4": "idleness $3/4$", "weighted walk": "weighted lazy walk"}
@@ -861,12 +730,12 @@ def block_e7(R, O: Out):
             lines.append(f"{pretty.get(meas, meas)} & {f_num(np.median(r), 2)} & {f_num(np.max(r), 2)}" + r" \\")
         O.table("measures", lines)
         nl = d[d["measure"] != "lazy"]["rel_lazy"].astype(float)
-        O.put("ESevenRelMax", f_x(nanstat(np.nanmax, nl)), "e7/measures: max time relative to lazy")
-        O.put("ESevenRelMedian", f_x(nanstat(np.nanmedian, nl)), "e7/measures: median time relative to lazy")
+        O.put("ESixRelMax", f_x(nanstat(np.nanmax, nl)), "e6/measures: max time relative to lazy")
+        O.put("ESixRelMedian", f_x(nanstat(np.nanmedian, nl)), "e6/measures: median time relative to lazy")
     except FileNotFoundError:
-        O.missing.append("e7/measures.csv")
+        O.missing.append("e6/measures.csv")
     try:
-        d = load(R, "e7/radius.csv")
+        d = load(R, "e6/radius.csv")
         lines = []
         for cfg, sub in d.groupby("config", sort=False):
             r = sub["pot_est_total_1thread_s"].astype(float) / sub["est_total_1thread_s"].astype(float)
@@ -876,13 +745,13 @@ def block_e7(R, O: Out):
                          f" & {f_sci(nanstat(np.nanmax, sub['max_diff_vs_pot'].astype(float)))}"
                          f" & {f_pct(nanstat(np.nanmin, sub['certified_share'].astype(float)), 0)}" + r" \\")
         O.table("radius", lines)
-        O.put("ESevenCertifiedMin", f_pct(nanstat(np.nanmin, d["certified_share"].astype(float)), 0), "e7/radius: min certified share")
+        O.put("ESixCertifiedMin", f_pct(nanstat(np.nanmin, d["certified_share"].astype(float)), 0), "e6/radius: min certified share")
         r2 = d[d["config"] == "ball r=2"]
         if len(r2):
             rr = r2["pot_est_total_1thread_s"].astype(float) / r2["est_total_1thread_s"].astype(float)
-            O.put("ESevenBallTwoPotMedian", f_x(nanstat(np.nanmedian, rr)), "e7/radius: POT/orcut, ball r=2, median")
+            O.put("ESixBallTwoPotMedian", f_x(nanstat(np.nanmedian, rr)), "e6/radius: POT/orcut, ball r=2, median")
     except FileNotFoundError:
-        O.missing.append("e7/radius.csv")
+        O.missing.append("e6/radius.csv")
 
 
 def block_env(R, O: Out):
@@ -911,8 +780,7 @@ def main():
                      ("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
                      ("E2C", lambda: block_e2c(a.results, O)),
                      ("E3", lambda: block_e3(a.results, O, paper)), ("E4", lambda: block_e4(a.results, O)),
-                     ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O, paper)),
-                     ("E7", lambda: block_e7(a.results, O))):
+                     ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O))):
         try:
             fn()
         except FileNotFoundError as ex:

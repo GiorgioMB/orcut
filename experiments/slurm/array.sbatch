@@ -1,24 +1,23 @@
 #!/bin/bash
 # The experiments as a job array, one step per task (independent; run the artifacts afterwards):
-#   sbatch experiments/slurm/array.sbatch                                     # every step of the paper
-#   sbatch --array=10,11 experiments/slurm/array.sbatch                       # E6 (not in the paper)
+#   sbatch experiments/slurm/array.sbatch                                     # every step
 #   sbatch --array=8,10 experiments/slurm/array.sbatch --force               # options after the script go to main.py
 #   sbatch --array=9 experiments/slurm/array.sbatch --force -- --budget 3600 # and those after -- to the step
 #   python experiments/main.py --steps artifacts --out results               # when all tasks are done
 # Steps (index: step): 0 e1, 1 e2-controlled, 2 e2-real, 3 e2-dasgupta, 4 e3-real, 5 e3-threads,
-# 6 e3-synth, 7 e4, 8 e5-whole, 9 e5-sinkhorn, 10 e6-borf, 11 e6-community, 12 e7-measures,
-# 13 e7-radius; every step resumes where it stopped if resubmitted.
+# 6 e3-synth, 7 e4, 8 e5-whole, 9 e5-sinkhorn, 10 e6-measures, 11 e6-radius; every step resumes
+# where it stopped if resubmitted. (Up to 1.3, 10 and 11 were E6, now removed, and E7 was 12, 13.)
 #
 # Environments (no need to activate either before sbatch):
 #   orcut      runs every step (environment.yml). Found as: $ORCUT_PYTHON; else the active conda
 #              environment, if it is orcut; else the environment named orcut in `conda env list`.
-#   orcut-grc  runs GraphRicciCurvature for e5-whole (8) and e6-borf (10), which call it for those
-#              runs (experiments/grc-environment.yml). Found as: $ORCUT_GRC_PYTHON; else orcut-grc
-#              next to orcut (e.g. .../conda_envs/orcut-grc); else `conda env list`. Tasks 8 and 10
-#              stop at once if GraphRicciCurvature does not import there.
+#   orcut-grc  runs GraphRicciCurvature for e5-whole (8), which calls it for those runs
+#              (experiments/grc-environment.yml). Found as: $ORCUT_GRC_PYTHON; else orcut-grc next
+#              to orcut (e.g. .../conda_envs/orcut-grc); else `conda env list`. Task 8 stops at once
+#              if GraphRicciCurvature does not import there.
 # ORCUT_DATA and ORCUT_RESULTS as in run_all.sbatch; ORCUT_ROOT sets the repository.
 #SBATCH --job-name=orcut-step
-#SBATCH --array=0-9,12,13   # 10, 11: E6, not part of the current paper (ask for them with --array)
+#SBATCH --array=0-11
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
@@ -42,9 +41,9 @@ fi
 [ -n "$ROOT" ] && [ -f "$ROOT/experiments/main.py" ] || {
   echo "cannot find the orcut repository: sbatch from its root, or set ORCUT_ROOT" >&2; exit 2; }
 cd "$ROOT"
-STEPS=(e1 e2-controlled e2-real e2-dasgupta e3-real e3-threads e3-synth e4 e5-whole e5-sinkhorn e6-borf e6-community e7-measures e7-radius)
+STEPS=(e1 e2-controlled e2-real e2-dasgupta e3-real e3-threads e3-synth e4 e5-whole e5-sinkhorn e6-measures e6-radius)
 STEP="${STEPS[$SLURM_ARRAY_TASK_ID]}"
-GRC_STEPS=" e5-whole e6-borf "   # the steps that also run GraphRicciCurvature
+GRC_STEPS=" e5-whole "   # the steps that also run GraphRicciCurvature
 
 env_python() {  # env_python <name>: the python of the conda environment called <name>, if conda lists one
   local tool p

@@ -36,11 +36,15 @@ pytest -q
 ```
 
 ## Versions
+* **1.4.0** (the version of the arXiv paper): the solver is unchanged (the same values); the
+  experiments are E1 to E6 as in the paper: the downstream experiment of 1.3 is removed and E7 is
+  now E6 (`e6-measures`, `e6-radius`, `results/e6/`); results of 1.3 are moved into place on the
+  first run. See CHANGELOG.md.
 * **1.3.1**: the solver is unchanged (the same values); fixes to the experiments: GraphRicciCurvature's
   memory is estimated from measurements, a GRC run killed at the memory limit is reported as such
   and retried by a job with more memory, the paper's figures and tables are drawn at their printed
-  size, and E6 runs only when asked. See CHANGELOG.md.
-* **1.3.0** (the version of the arXiv paper): the solver is unchanged; the experiments resume
+  size, and the downstream experiment (then E6) runs only when asked. See CHANGELOG.md.
+* **1.3.0**: the solver is unchanged; the experiments resume
   from wherever a job was stopped (checkpoints per step, per row and inside rows), run without time
   budgets, and find their environments on SLURM. See CHANGELOG.md.
 * **1.2.1**: fixed the unpickler for downloaded Planetoid datasets to support loading Python 2 `__builtin__` containers.
@@ -73,4 +77,5 @@ pytest -q
 | `orcut/_reference.py` | independent oracle: full local distance matrix, three-level closure, recursive Dinic |
 | `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `affected_edges`, `exact` (1.0.0 API), thread control |
 | `tests/` | kernels against each other (bit for bit), against the oracle, and against linear programming |
-| `experiments/` | the experiments of the paper (see `experiments/README.md`) |
+| `experiments/` | the experiments of the paper, E1 to E6 (see `experiments/README.md`) |
+| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically) |
