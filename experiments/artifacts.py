@@ -515,6 +515,11 @@ def block_e3(R, O: Out, figdir: str):
         import matplotlib.pyplot as plt
 
         s = load(R, "e3/synth.csv")
+        if "chunks_timed" in s:  # a row whose time does not sum all its chunks (tools/check_chunks.py)
+            short = s[s["chunks_timed"].astype(float) < s["chunks"].astype(float)]
+            for _, r in short.iterrows():
+                O.missing.append(f"e3/synth.csv: {r['family']} {r['regime']} n={r['n']} sums "
+                                 f"{int(r['chunks_timed'])} of {int(r['chunks'])} chunks (tools/check_chunks.py)")
         lines = []
         fig, axes = plt.subplots(1, 2, figsize=(FIG_W, 2.1))
         for ax, regime in zip(axes, ["fixed16", "grow0.4"]):
@@ -580,8 +585,7 @@ def block_e4(R, O: Out):
             rat.append(sub["cut"] / sub["full"])
         if "-twins" in sub and "full" in sub:
             tw.append(sub["-twins"] / sub["full"])
-        if "pot" in sub and "full" in sub:
-            pass
+    rat, tw = [x for x in rat if np.isfinite(x)], [x for x in tw if np.isfinite(x)]
     if rat:
         O.put("EFourCutOverFullMedian", f_x(np.median(rat)), "e4: median (plain cut)/(full)")
         O.put("EFourCutOverFullMax", f_x(np.max(rat)), "e4: max (plain cut)/(full)")
@@ -592,7 +596,11 @@ def block_e4(R, O: Out):
         sub = d[d["graph"] == gname].set_index("config")["est_total_s"].astype(float)
         if "pot" in sub and "full" in sub:
             pot.append(sub["pot"] / sub["full"])
+    # POT is not run where the dense local problems exceed the memory guard (est_total_s NaN): the
+    # statistics are over the graphs where it ran, and EFourPotGraphs says how many
+    pot = [x for x in pot if np.isfinite(x)]
     if pot:
+        O.put("EFourPotGraphs", f_int(len(pot)), "e4: graphs on which explicit D + POT ran (its local problems fit)")
         O.put("EFourPotOverFullMedian", f_x(np.median(pot)), "e4: median (explicit D + POT)/(full), single thread")
         O.put("EFourPotOverFullMin", f_x(np.min(pot)), "e4: min (explicit D + POT)/(full)")
         O.put("EFourPotOverFullMax", f_x(np.max(pot)), "e4: max (explicit D + POT)/(full)")
@@ -605,6 +613,7 @@ def block_e4(R, O: Out):
             sub = d[d["graph"] == gname].set_index("config")["est_total_s"].astype(float)
             if cfg in sub and "full" in sub:
                 r.append(sub[cfg] / sub["full"])
+        r = [x for x in r if np.isfinite(x)]
         if r:
             O.put(f"EFour{key}OverFullMedian", f_x(np.median(r)), f"e4: median ({what})/(full), single thread")
             O.put(f"EFour{key}OverFullMin", f_x(np.min(r)), f"e4: min ({what})/(full)")

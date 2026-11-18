@@ -36,7 +36,11 @@ pytest -q
 ```
 
 ## Versions
-* **1.4.0** (the version of the arXiv paper): the solver is unchanged (the same values); the
+* **1.4.1** (the version of the arXiv paper): the solver is unchanged (the same values); E3's
+  synthetic sweep stops at the sizes that were run, its rows get no POT estimate, and a row solved
+  in chunks by several workers sums all its chunks (`tools/check_chunks.py` checks and repairs
+  results written before). See CHANGELOG.md.
+* **1.4.0**: the solver is unchanged (the same values); the
   experiments are E1 to E6 as in the paper: the downstream experiment of 1.3 is removed and E7 is
   now E6 (`e6-measures`, `e6-radius`, `results/e6/`); results of 1.3 are moved into place on the
   first run. See CHANGELOG.md.
@@ -78,4 +82,4 @@ pytest -q
 | `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `affected_edges`, `exact` (1.0.0 API), thread control |
 | `tests/` | kernels against each other (bit for bit), against the oracle, and against linear programming |
 | `experiments/` | the experiments of the paper, E1 to E6 (see `experiments/README.md`) |
-| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically) |
+| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically); `check_chunks.py` (E3's rows solved in chunks against their saved chunks) |

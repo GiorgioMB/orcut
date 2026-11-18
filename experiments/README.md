@@ -75,7 +75,12 @@ python experiments/main.py --status                            # what is done, f
 
 Inside E3, a solve that takes hours (graphs above 10^7 edges, and synthetic sizes predicted to
 take over an hour) is also saved chunk by chunk in `results/e3/partial/`, and resumes at the next
-chunk; the log shows each chunk and an estimate of the time left.
+chunk; the log shows each chunk and an estimate of the time left. `python tools/check_chunks.py`
+checks that every chunked row sums all the chunks of its logs (and `--fix` repairs a synthetic row
+that does not, from its logs). E3's synthetic sweep stops at the sizes that were run
+(`SYNTH_MAX_N` in `e3_scale.py`: CL2.1 up to 3 x 10^6 at average degree 16; at 2.1 n^0.4, ER and
+BA up to 3 x 10^5, CL2.1 and CL2.5 up to 10^5); the larger ones take weeks to months
+(`--all-sizes`).
 
 `--force` recomputes the selected steps from scratch: their result tables (and E3's saved chunks)
 are first moved to `results/replaced/<step>-<time>/`, so the old results are kept. Options after `--`
@@ -105,7 +110,8 @@ separately. POT's network simplex is called through its C++ entry point (`emd_c`
 overhead; `ot.emd2` (what GRC calls) is reported too. On whole graphs, the POT pipeline is timed on a
 stratified sample of edges (bins of d_i + d_j, up to 50 per bin, largest bins first), extrapolated
 to all edges with the bin counts, and divided by the number of threads; this assumes perfect
-parallel scaling and is therefore a lower bound on its parallel time. Edges whose dense local
+parallel scaling and is therefore a lower bound on its parallel time. The synthetic graphs of E3 get
+no such estimate (`--synth-pot`): the paper uses only their time. Edges whose dense local
 problem would have more than 5 x 10^7 entries ((d_i + 1)(d_j + 1), gigabytes of cost matrix and
 plan) are not run and count as free, which keeps it a lower bound (`pot_free_share` in the table).
 The same guard protects the per-edge baselines of E1, E2, E4 and E5, and E6 skips graphs whose

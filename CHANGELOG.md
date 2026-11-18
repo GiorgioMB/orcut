@@ -1,9 +1,39 @@
 # Changelog
 
+## 1.4.1
+
+The version of the arXiv paper. The solver is unchanged from 1.4.0 (the same values); the changes
+are in E3's synthetic sweep and in its rows solved in chunks.
+
+- E3's synthetic sweep stops at the sizes that were run (`SYNTH_MAX_N`, `synth_plan`): at average
+  degree 16 CL2.1 up to 3 x 10^6 (not 10^7), and at 2.1 n^0.4 ER and BA up to 3 x 10^5, CL2.1 and
+  CL2.5 up to 10^5 (not 10^6): 89 rows instead of 96. The others take weeks to months: the first of
+  the 3,085 chunks of CL2.1 at 10^7 alone took 5.3 h on 32 threads. `--all-sizes` plans them again.
+- Synthetic rows get no POT estimate (`--synth-pot` adds it). The paper uses their time only, and
+  the estimate, which times every sampled edge however long it takes, held CL2.1 at 3 x 10^6 for
+  days after its 204 chunks were done (87 h on 32 threads); the row is now written from them.
+- Rows solved in chunks by several workers (`main.py --worker`): a worker that finishes a chunk after
+  another one has written the row drops it, instead of starting a second chunk log from an old copy
+  of the first; a row whose log is complete but which is missing from the table is written again
+  from the log, without solving; an incomplete completed log is completed. Up to 1.4.0, WS at
+  2.1 n^0.4 and n = 10^6 was written from 27 of its 43 chunks (42.3 h of 62.0 h). Chunked rows
+  record `chunks_timed`, the number of chunk times their time sums, and `artifacts.py` reports a
+  row with fewer than its `chunks` under "Missing or failed".
+- `tools/check_chunks.py`: compares every chunked row of e3/real.csv and e3/synth.csv with the union
+  of its saved chunk logs; `--fix` rewrites a synthetic row from them when they cover its whole plan
+  (the originals go to `results/replaced/check-chunks-<time>/`). Of the results of 1.4.0, it
+  repairs WS at 2.1 n^0.4, n = 10^6; every row of e3/real.csv, Orkut's included, sums all its chunks.
+- The log says why a row is left to other workers: some of its chunks are under way, or all are done
+  and another worker is writing the row (it said "its other chunks are being computed" in both cases).
+- `artifacts.py`, E4: a configuration that did not run on some graphs gives its ratios over the
+  graphs where it ran. Distances plus POT is not run where the dense local problems exceed the
+  memory guard (CL2.1 and GitHub), and its median, minimum and maximum came out empty ("--"); they
+  are now over the 8 other graphs, which `EFourPotGraphs` counts.
+
 ## 1.4.0
 
-The version of the arXiv paper. The solver is unchanged from 1.3.1 (the same values); the
-experiments are now numbered as in the paper.
+The solver is unchanged from 1.3.1 (the same values); the experiments are now numbered as in
+the paper.
 
 - The downstream experiment (E6 up to 1.3: BORF rewiring and community detection by edge deletion)
   is removed, with what only it used: `e6_downstream.py`, `dynamic.py`, the GNN benchmarks (Cornell,

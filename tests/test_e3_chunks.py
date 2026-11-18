@@ -94,3 +94,59 @@ def test_predicted_time(tmp_path, monkeypatch):
     assert E.predicted_time(rows, "CL2.1", "fixed16", 0, 6.5e6) == pytest.approx(2496.87 * (6.5e6 / 1966735) ** k)
     assert E.predicted_time(rows, "CL2.1", "fixed16", 0, 6.5e6) > 3600  # CL2.1 at n = 10^6: chunked
     assert E.predicted_time(rows, "CL2.1", "grow0.4", 0, 6.5e6) == 0.0
+
+
+def test_synth_plan_stops_at_the_sizes_that_were_run():
+    p = E.synth_plan()
+    assert len(p) == 89 and len(E.synth_plan(all_sizes=True)) == 96
+    have = {(f, r, n) for f, r, n, _ in p}
+    assert ("CL2.1", "fixed16", 3 * 10**6) in have and ("CL2.1", "fixed16", 10**7) not in have
+    assert ("RGG", "grow0.4", 10**6) in have and ("ER", "grow0.4", 10**6) not in have
+    assert ("CL2.5", "grow0.4", 10**5) in have and ("CL2.5", "grow0.4", 3 * 10**5) not in have
+
+
+def _solve(g, path, claims, **kw):
+    return E.solve_chunked(g, "lazy", 1, str(path), max(1, g.num_edges // 4), "CL2.1 n=1500", claims=str(claims), **kw)
+
+
+def test_a_completed_log_gives_its_row_again_without_solving(g, tmp_path, monkeypatch):
+    """A row whose log is complete but which is missing from the table is written from the log."""
+    monkeypatch.setattr(common, "_TABLES", [])
+    path, claims = tmp_path / "x.json", tmp_path / "claims"
+    state, tot, finish = _solve(g, path, claims)
+    finish.release()
+    E._finish_chunked(str(path))
+    import orcut
+    monkeypatch.setattr(orcut, "curvature", lambda *a, **k: pytest.fail("solved again"))
+    state2, tot2, finish2 = _solve(g, path, claims)
+    finish2.release()
+    assert tot2["seconds"] == tot["seconds"] and len(state2["chunks"]) == len(state["bounds"]) - 1
+
+
+def test_a_chunk_finished_after_the_row_was_written_is_dropped(g, tmp_path, monkeypatch):
+    """Up to 1.4.0, such a chunk started a second log from an old copy of the first."""
+    monkeypatch.setattr(common, "_TABLES", [])
+    full, claims, path = tmp_path / "full.json", tmp_path / "claims", tmp_path / "x.json"
+    state, tot, finish = _solve(g, full, claims)  # the complete log of another worker
+    finish.release()
+
+    def written_meanwhile(c):
+        if c == 0:  # the other worker writes the row: its log becomes x.done.json
+            os.replace(str(full), str(tmp_path / "x.done.json"))
+            os.remove(str(path))
+
+    assert _solve(g, path, claims, after_chunk=written_meanwhile) is None
+    assert not path.exists()
+
+
+def test_an_incomplete_completed_log_is_completed(g, tmp_path, monkeypatch):
+    """The case of WS at 2.1 n^0.4, n = 10^6: a completed log with some of its chunks."""
+    monkeypatch.setattr(common, "_TABLES", [])
+    full, claims = tmp_path / "full.json", tmp_path / "claims"
+    state, tot, finish = _solve(g, full, claims)
+    finish.release()
+    part = dict(state, chunks=dict(list(state["chunks"].items())[:2]))
+    (tmp_path / "x.done.json").write_text(json.dumps(part))
+    state2, tot2, finish2 = _solve(g, tmp_path / "x.json", claims)
+    finish2.release()
+    assert len(state2["chunks"]) == len(state["bounds"]) - 1 and set(part["chunks"]) <= set(state2["chunks"])

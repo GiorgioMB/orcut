@@ -12,8 +12,12 @@ parallel scaling, a lower bound on its parallel time).
 Part ``threads``: strong scaling (1, 2, 4, ..., ``--threads``) on ``--graphs``.
 
 Part ``synth``: random families (ER, BA, RGG, WS, Chung--Lu 2.1 / 2.5) with average degree 16 and
-n = 10^3 .. 10^7, and with average degree 2.1 n^0.4 (as in the companion paper), n = 10^3 .. 10^6;
-time against the number of edges and against sum_e (d_i + d_j).
+n = 10^3 .. 10^7 (CL2.1: up to 3 x 10^6), and with average degree 2.1 n^0.4 (as in the companion
+paper), n = 10^3 .. 10^6 (ER, BA: up to 3 x 10^5; CL2.1, CL2.5: up to 10^5); time against the number
+of edges. The larger sizes (``SYNTH_MAX_N``; ``--all-sizes`` plans them too) take weeks to months:
+the first of the 3,085 chunks of CL2.1 at n = 10^7 alone took 5.3 h on 32 threads. Synthetic rows
+have no POT estimate (``--synth-pot`` adds it): the paper uses their time only, and on CL2.1 the
+estimate, which times every sampled edge however long it takes, held a solved row for days.
 
 Long solves are saved as they go. A graph of part ``real`` with more than ``--chunk-above`` edges
 (10^7), and a row of part ``synth`` that the two previous sizes of its family predict to take more
@@ -22,8 +26,11 @@ diagnostics come from the same pass) by contiguous chunks of edges, about 20 or 
 the size of their two-hop scans. After each chunk, its time, peak memory and diagnostic counts go
 to ``<out>/e3/partial/*.json``, so a run stopped by the time limit resumes at the next chunk. The
 row's time is the sum over its chunks and its peak memory the largest over them (the per-edge
-outputs are held for one chunk at a time); its ``chunks`` column says how many, ``chunk_hosts`` on
-how many machines they ran.
+outputs are held for one chunk at a time); its ``chunks`` column says how many, ``chunks_timed`` how
+many timings the time sums (the same number), ``chunk_hosts`` on how many machines they ran. A
+worker that finishes a chunk after another one has written the row (its chunk log is then
+``*.done.json``) drops the chunk instead of starting a second log; a row whose log is complete but
+which is missing from the table is written again from that log.
 
 Usage: python e3_scale.py --part real|threads|synth [--graphs ...] [--threads 32] [--out results]
 """
@@ -215,8 +222,13 @@ def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=Non
 
     key = dict(graph=label, measure=str(measure), n=int(g.num_nodes), m=int(g.num_edges), threads=int(threads))
     k = max(1, -(-g.num_edges // max(1, int(chunk_edges))))
+    done_path = path[:-len(".json")] + ".done.json"
     with xio.locked(path):  # workers that start together agree on one plan
         state = _load_plan(path, key)
+        if state is None and not os.path.exists(path):
+            # a completed log (the row was written, or its row was removed from the table since):
+            # its chunks give the row again, without solving them again
+            state = _load_plan(done_path, key)
         if state is None or (not state.get("chunks") and state.get("k") != k):  # nothing done yet: the new size
             state = dict(key=key, k=k, bounds=chunk_bounds(g, k), chunks={})
             xio.atomic_json(state, path)
@@ -253,7 +265,15 @@ def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=Non
         del res
         st.update(seconds=dt, peak_mb=s.peak - s.base, host=socket.gethostname(), finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         with xio.locked(path):  # merge with the chunks other workers saved meanwhile
-            state = _load_plan(path, key) or state
+            finished = None if os.path.exists(path) else _load_plan(done_path, key)
+            if finished is not None and len(finished["chunks"]) >= nch:
+                # the row was written meanwhile: saving this chunk would start a second log from an
+                # old copy of the first (and a later row could be written from it)
+                if lock is not None:
+                    lock.release()
+                log(f"E3 {label:16s} {measure!s:8s} written by another worker meanwhile; chunk {c + 1} dropped")
+                return None
+            state = _load_plan(path, key) or finished or state
             state["chunks"][str(c)] = st
             xio.atomic_json(state, path)
         done = state["chunks"]
@@ -266,14 +286,17 @@ def solve_chunked(g, measure, threads, path, chunk_edges, label, after_chunk=Non
             after_chunk(c)
     state = _load_plan(path, key) or state
     if len(state["chunks"]) < nch:
-        return None  # chunks still under way on other workers
+        log(f"E3 {label:16s} {measure!s:8s} {nch - len(state['chunks'])} of its {nch} chunks are being computed by "
+            f"other workers")
+        return None
     finish = None
     if claims:
         finish = CK.StepLock(claims, f"{base}.row")
         try:
             finish.acquire()
         except CK.Busy:
-            return None  # another worker is writing the row
+            log(f"E3 {label:16s} {measure!s:8s} all {nch} chunks are done; another worker is writing the row")
+            return None
     return state, _combine(state["chunks"].values()), finish
 
 
@@ -328,6 +351,7 @@ def part_real(a):
                            runs=1, load_s=t_load, peak_extra_mb=peak,
                            graph_mb=(g.indptr.nbytes + g.indices.nbytes + g.edges.nbytes) / 2**20,
                            nan=tot["nan"], cite=meta.get("cite", ""), chunks=len(state["bounds"]) - 1,
+                           chunks_timed=len(state["chunks"]),
                            chunk_hosts=len({str(c.get("host")) for c in state["chunks"].values()}))
                 if measure == "lazy":
                     row.update(diag_fields(tot, g.num_edges))
@@ -470,15 +494,28 @@ def synth_m(rows, fam, regime, n):
     return y / x * n
 
 
-def part_synth(a):
-    rows = Rows(f"{out_dir(a.out, 'e3')}/synth.csv", ["family", "regime", "n", "seed"])
+# The largest size of each (family, regime) that part synth plans (beyond them: weeks to months).
+SYNTH_MAX_N = {("CL2.1", "fixed16"): 3 * 10**6, ("ER", "grow0.4"): 3 * 10**5, ("BA", "grow0.4"): 3 * 10**5,
+               ("CL2.1", "grow0.4"): 10**5, ("CL2.5", "grow0.4"): 10**5}
+
+
+def synth_plan(quick=False, all_sizes=False):
+    """[(family, regime, n, average degree)] of part synth, in the order it runs them."""
     fams = ["ER", "BA", "RGG", "WS", "CL2.1", "CL2.5"]
     sizes_fixed = [10**3, 3 * 10**3, 10**4, 3 * 10**4, 10**5, 3 * 10**5, 10**6, 3 * 10**6, 10**7]
     sizes_grow = [10**3, 3 * 10**3, 10**4, 3 * 10**4, 10**5, 3 * 10**5, 10**6]
-    if a.quick:
+    if quick:
         sizes_fixed, sizes_grow, fams = [10**3, 10**4], [10**3, 3 * 10**3], ["ER", "CL2.1"]
     plan = [(f, "fixed16", n, 16.0) for f in fams for n in sizes_fixed] + \
            [(f, "grow0.4", n, 2.1 * n ** 0.4) for f in fams for n in sizes_grow]
+    if not all_sizes:
+        plan = [p for p in plan if p[2] <= SYNTH_MAX_N.get((p[0], p[1]), p[2])]
+    return plan
+
+
+def part_synth(a):
+    rows = Rows(f"{out_dir(a.out, 'e3')}/synth.csv", ["family", "regime", "n", "seed"])
+    plan = synth_plan(a.quick, a.all_sizes)
     claims = os.path.join(out_dir(a.out, "e3", "partial"), "claims")  # chunks and rows taken by workers
     left = []  # rows left to other workers (main.py --worker): the step is done only once they are
     pending = [(fam, regime, n, d, seed) for fam, regime, n, d in plan for seed in range(a.seeds)
@@ -507,13 +544,13 @@ def part_synth(a):
                 f"{k} chunks")
             ckpt = os.path.join(out_dir(a.out, "e3", "partial"), f"synth.{R.slug(fam)}.{regime}.n{n}.s{seed}.T{a.threads}.json")
             got = solve_chunked(g, "lazy", a.threads, ckpt, max(1, -(-g.num_edges // k)), f"{fam} n={nn}", claims=claims)
-            if got is None:
-                log(f"E3S {fam:6s} {regime:8s} n={nn:>9,} its other chunks are being computed by other workers")
+            if got is None:  # solve_chunked has logged why: chunks under way elsewhere, or the row being written
                 left.append(item)
                 continue
             state, tot, finish = got
             t = tot["seconds"]
-            extra = dict(chunks=len(state["bounds"]) - 1, chunk_hosts=len({str(c.get("host")) for c in state["chunks"].values()}))
+            extra = dict(chunks=len(state["bounds"]) - 1, chunks_timed=len(state["chunks"]),
+                         chunk_hosts=len({str(c.get("host")) for c in state["chunks"].values()}))
         else:
             ckpt = None
             finish = CK.StepLock(claims, f"synth.{R.slug(fam)}.{regime}.n{n}.s{seed}.T{a.threads}.row")  # one worker
@@ -529,7 +566,7 @@ def part_synth(a):
         row = dict(family=fam, regime=regime, n=nn, n_target=n, avg_deg_target=d, seed=seed, m=g.num_edges,
                    deg_max=int(g.deg.max()), sum_dsum=W, sum_dsum2=W2, threads=a.threads, time_s=t, **extra)
         pck = os.path.join(out_dir(a.out, "e3", "partial"), f"synth.pot.{R.slug(fam)}.{regime}.n{n}.s{seed}.json")
-        if not a.no_pot:
+        if a.synth_pot and not a.no_pot:
             full, solve, timed, free = pot_estimate(g, per_bin=a.pot_per_bin, max_pairs=a.pot_max_pairs, ckpt=pck)
             row.update(pot_est_1thread_s=full, pot_est_s=full / a.threads, pot_free_share=free)
         rows.add(row)
@@ -554,6 +591,9 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--lazy-only", action="store_true")
     ap.add_argument("--no-pot", action="store_true", help="skip the POT estimate")
+    ap.add_argument("--synth-pot", action="store_true", help="part synth: estimate the POT pipeline too (not used by the paper)")
+    ap.add_argument("--all-sizes", action="store_true",
+                    help="part synth: also the sizes beyond SYNTH_MAX_N (weeks to months each)")
     ap.add_argument("--pot-per-bin", type=int, default=50)
     ap.add_argument("--pot-max-pairs", type=float, default=5e7,
                     help="edges with (d_i+1)(d_j+1) above this count as free in the POT estimate (memory)")
