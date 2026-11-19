@@ -55,7 +55,8 @@ python experiments/main.py --status                            # what is done, f
   run again (`--force` computes it again from scratch, e.g. `--steps e2-real --force`). A step that failed, was
   killed, or left rows that ended in an error runs again. `artifacts` runs again when the result
   tables changed since its last run (after changing `artifacts.py` itself, run it directly:
-  `python experiments/artifacts.py --results results --paper-dir ../paper/generated`); E5 (whole),
+  `python experiments/artifacts.py --results results --paper-dir ../paper/generated`; for the
+  ICML layout and an anonymous version, add `--fig-width 6.75 --method-name ours`); E5 (whole),
   when completed without GraphRicciCurvature, runs again once it is available (`--grc-python`,
   `ORCUT_GRC_PYTHON`); and a step whose tables hold rows skipped for memory, or killed at the
   memory limit, runs again (for these rows) in a job with more memory than the one that completed

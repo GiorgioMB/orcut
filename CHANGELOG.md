@@ -1,8 +1,18 @@
 # Changelog
 
+## 1.4.2
+
+The version of the arXiv paper. The solver and every number of the paper are unchanged from 1.4.1.
+
+- `artifacts.py --fig-width INCHES`: the text width the figures are drawn at (5.5 for LoG, the
+  default; 6.75 for ICML, whose two-column figures span the page); fonts keep their printed size.
+- `artifacts.py --method-name NAME`: the solver's name in figure legends and table labels
+  ("orcut" by default; "ours" for an anonymous version). The data and the keys are unchanged.
+- With the defaults, the output (numbers, tables, KEYS.md, figures) is byte for byte that of 1.4.1.
+
 ## 1.4.1
 
-The version of the arXiv paper. The solver is unchanged from 1.4.0 (the same values); the changes
+The solver is unchanged from 1.4.0 (the same values); the changes
 are in E3's synthetic sweep and in its rows solved in chunks.
 
 - E3's synthetic sweep stops at the sizes that were run (`SYNTH_MAX_N`, `synth_plan`): at average

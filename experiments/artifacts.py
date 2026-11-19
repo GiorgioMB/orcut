@@ -200,14 +200,15 @@ def block_e1(R, O: Out):
 
 # ------------------------------------------------------------------ E2
 
-E2_METHODS = [("ours", "orcut", "-", "o"), ("nowitness", "orcut, no witness relays", (0, (4, 1.5)), "."),
+METHOD = "orcut"  # the solver's name in figure legends and table labels (--method-name; e.g. "ours" for review)
+E2_METHODS = [("ours", "{method}", "-", "o"), ("nowitness", "{method}, no witness relays", (0, (4, 1.5)), "."),
               ("witness", "witness network alone", (0, (1, 1)), "P"),
               ("graphflow", "graph min-cost flow", "-.", "*"),
               ("pot", "POT (given distances)", "--", "s"), ("emd2", "ot.emd2 (given distances)", ":", "^"),
               ("ortools", "OR-Tools (given distances)", "-.", "D"), ("highs", "HiGHS (given distances)", ":", "v"),
               ("oracle", "previous solver", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
-FIG_W = 5.5  # text width of the paper (inches): figures are drawn at the width they are printed at
+FIG_W = 5.5  # text width of the paper (inches; --fig-width): figures are drawn at the width they are printed at
 
 
 def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
@@ -351,7 +352,7 @@ def block_e2(R, O: Out, figdir: str):
                 for key, lab, ls, mk in E2_METHODS:
                     col = f"{key}_s"
                     if key in keys and col in sub and sub[col].notna().any():
-                        ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, label=lab)
+                        ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, label=lab.format(method=METHOD))
                 if "build_s" in sub:
                     ax.loglog(sub["s"], sub["build_s"], color="0.6", lw=0.8, label="distances only")
                 from matplotlib.ticker import NullFormatter
@@ -548,7 +549,7 @@ def block_e3(R, O: Out, figdir: str):
 # ------------------------------------------------------------------ E4
 
 E4_ORDER = [("cut", "two-layer cut, bitsets"), ("+relays", "+ relays $H_1,\\dots,H_4$"), ("+twins", "+ twin merging"),
-            ("+fast", "+ fast path"), ("+warm", "+ warm start"), ("full", "+ witness relays (orcut)"),
+            ("+fast", "+ fast path"), ("+warm", "+ warm start"), ("full", "+ witness relays ({method})"),
             ("-relays", "full $-$ all relays"), ("-twins", "full $-$ twins"), ("-fast", "full $-$ fast path"),
             ("-warm", "full $-$ warm start"), ("witness", "witness network alone"),
             ("graphflow", "graph min-cost flow"), ("oracle", "previous solver"),
@@ -561,6 +562,7 @@ def block_e4(R, O: Out):
     graphs = list(dict.fromkeys(d["graph"]))
     lines = []
     for cfg, label in E4_ORDER:
+        label = label.format(method=METHOD) if "{method}" in label else label
         cells = [label]
         for gname in graphs:
             sub = d[(d["graph"] == gname)]
@@ -695,7 +697,7 @@ def block_e5(R, O: Out, figdir: str):
             if len(o):
                 ax.axvline(float(o["time_edge_weighted_s"].iloc[0]), color=col, ls=":", lw=0.9)
             handles.append(Line2D([], [], color=col, ls=ls, lw=1.2, label=gname))
-        handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label="orcut (exact)"))
+        handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label=f"{METHOD} (exact)"))
         ax.add_artist(ax.legend(handles=[Line2D([], [], ls="none", marker=marks[r], ms=4, color="0.25", label=f"{r:g}")
                                          for r in regs], title=r"Sinkhorn, $\varepsilon$", loc="upper right",
                                 fontsize=7, title_fontsize=7, frameon=False, handletextpad=0.3))
@@ -777,11 +779,17 @@ def block_env(R, O: Out):
 
 
 def main():
+    global FIG_W, METHOD
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", default=common.RESULTS)
     ap.add_argument("--paper-dir", default=None)
     ap.add_argument("--provisional", action="store_true", help="mark every number as provisional (quick run)")
+    ap.add_argument("--fig-width", type=float, default=FIG_W,
+                    help="text width of the paper in inches, which figures are drawn at (LoG 5.5, ICML 6.75)")
+    ap.add_argument("--method-name", default=METHOD,
+                    help="the solver's name in figure legends and table labels (e.g. ours, for an anonymous version)")
     a = ap.parse_args()
+    FIG_W, METHOD = a.fig_width, a.method_name
     paper = a.paper_dir or os.path.join(a.results, "paper")
     os.makedirs(paper, exist_ok=True)
     O = Out(a.provisional)

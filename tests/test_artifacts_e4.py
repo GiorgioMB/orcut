@@ -23,3 +23,16 @@ def test_pot_ratios_are_over_the_graphs_where_it_ran(tmp_path):
     assert O.keys["EFourPotGraphs"] == "2"
     assert "8.0" in O.keys["EFourPotOverFullMax"] and "4.0" in O.keys["EFourPotOverFullMin"]
     assert "--" not in O.keys["EFourPotOverFullMedian"]
+
+
+def test_method_name_reaches_the_labels(tmp_path, monkeypatch):
+    """--method-name (e.g. 'ours' for an anonymous version) replaces the solver's name in the labels."""
+    rows = [dict(graph="ER", config=cfg, m=100, deg_max=10, value_mismatch=0, est_total_s=t)
+            for cfg, t in (("full", 1.0), ("cut", 2.0))]
+    (tmp_path / "e4").mkdir()
+    common.write_csv(rows, str(tmp_path / "e4" / "ablation.csv"))
+    monkeypatch.setattr(A, "METHOD", "ours")
+    O = A.Out(False)
+    A.block_e4(str(tmp_path), O)
+    table = O.rows["ablation"]
+    assert "+ witness relays (ours)" in table and "orcut" not in table
