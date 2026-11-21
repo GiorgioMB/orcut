@@ -552,7 +552,7 @@ E4_ORDER = [("cut", "two-layer cut, bitsets"), ("+relays", "+ relays $H_1,\\dots
             ("+fast", "+ fast path"), ("+warm", "+ warm start"), ("full", "+ witness relays ({method})"),
             ("-relays", "full $-$ all relays"), ("-twins", "full $-$ twins"), ("-fast", "full $-$ fast path"),
             ("-warm", "full $-$ warm start"), ("witness", "witness network alone"),
-            ("graphflow", "graph min-cost flow"), ("oracle", "previous solver"),
+            ("graphflow", "graph min-cost flow"), ("oracle", "oracle"),
             ("pot", "distance matrix + POT")]
 E4_RULE_AFTER = ("full", "-warm")
 
