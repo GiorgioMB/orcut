@@ -407,7 +407,7 @@ def block_e2c(R, O: Out):
     g = d.groupby(["kind", "n"]).median(numeric_only=True).reset_index()
     names = {"single": "one pair at distance 1", "matching": "perfect matching at distance 1",
              "bounded": "bounded weighted degrees", "blocks": "$\\sqrt n$ blocks at distance 2"}
-    lines, slopes, gf, pot = [], [], [], []
+    lines, rows, slopes, gf, pot = [], [], [], [], []
     order = ["single", "matching", "bounded", "blocks"]
     for kind in sorted(g["kind"].unique(), key=lambda x: order.index(x) if x in order else len(order)):
         sub = g[g["kind"] == kind].sort_values("n")
@@ -415,16 +415,23 @@ def block_e2c(R, O: Out):
         slopes.append(k)
         last = sub.iloc[-1]
         okp = sub.dropna(subset=["pot_s"]) if "pot_s" in sub else sub.iloc[0:0]
+        potcell, potn = "--", None
         if len(okp):
             lp = okp.iloc[-1]
             pot.append(((float(lp["pot_s"]) + float(lp.get("build_s", 0.0))) / float(lp["ours_s"]), int(lp["n"])))
+            potcell, potn = f_time(lp["pot_s"] + lp.get("build_s", 0.0)), int(lp["n"])
         if math.isfinite(float(last.get("graphflow_s", float("nan")))):
             gf.append(float(last["graphflow_s"]) / float(last["ours_s"]))
-        lines.append(" & ".join([names.get(kind, kind), f_int(last["n"]), f_int(last["local_input"]), f_int(last["arcs"]),
-                                 f_time(last["ours_s"]),
-                                 f_time(last["graphflow_s"]) if math.isfinite(float(last.get("graphflow_s", float("nan")))) else "--",
-                                 (f"{f_time(lp['pot_s'] + lp.get('build_s', 0.0))} ($n={f_int(lp['n'])}$)" if len(okp) else "--"),
-                                 f_num(k, 2) if math.isfinite(k) else "--"]) + r" \\")
+        rows.append(([names.get(kind, kind), f_int(last["n"]), f_int(last["local_input"]), f_int(last["arcs"]),
+                      f_time(last["ours_s"]),
+                      f_time(last["graphflow_s"]) if math.isfinite(float(last.get("graphflow_s", float("nan")))) else "--",
+                      potcell, f_num(k, 2) if math.isfinite(k) else "--"], potn))
+    # POT's n is the same in every row and goes in the table head (EDasPotMaxN); a cell gives its n only where it differs
+    pot_n = max((n_ for _, n_ in pot), default=None)
+    for cells, n_ in rows:
+        if n_ is not None and n_ != pot_n:
+            cells[6] += f" ($n={f_int(n_)}$)"
+        lines.append(" & ".join(cells) + r" \\")
     O.table("dasgupta", lines)
     O.put("EDasMaxN", f_int(g["n"].max()), "e2/dasgupta: largest n")
     big = g[g["n"] == g["n"].max()]
@@ -647,7 +654,7 @@ def block_e5(R, O: Out, figdir: str):
             return float(nanstat(np.nanmedian, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
         def mx(col):
             return float(nanstat(np.nanmax, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
-        cells = [label, f"{len(sub_ok)}/{len(sub)}",
+        cells = [label,
                  f_sci(med("mae")) if math.isfinite(med("mae")) else "--",
                  f_num(mx("max_err"), 2) if math.isfinite(mx("max_err")) else "--",
                  f_pct(med("sign_disagree")), f_num(med("spearman"), 3), f_pct(med("recall_neg"), 0)]
