@@ -206,7 +206,7 @@ E2_METHODS = [("ours", "{method}", "-", "o"), ("nowitness", "{method}, no witnes
               ("graphflow", "graph min-cost flow", "-.", "*"),
               ("pot", "POT (given distances)", "--", "s"), ("emd2", "ot.emd2 (given distances)", ":", "^"),
               ("ortools", "OR-Tools (given distances)", "-.", "D"), ("highs", "HiGHS (given distances)", ":", "v"),
-              ("oracle", "previous solver", "--", "x")]
+              ("oracle", "oracle", "--", "x")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
 FIG_W = 5.5  # text width of the paper (inches; --fig-width): figures are drawn at the width they are printed at
 

@@ -11,7 +11,8 @@ b = s, t = 4). Methods, all single-threaded and timed on the same edge after a w
   witness     the linear-size witness network alone (orcut._witness), everything included;
   graphflow   min-cost flow on the local graph (Beckmann's formulation; OR-Tools), everything included
               (it needs no distance matrix either);
-  oracle      orcut._reference: full local distance matrix, three-level closure (the previous solver);
+  oracle      orcut._reference, the independent test oracle (not the frozen 1.0.0 kernel): full local
+              distance matrix, three-level closure, recursive Dinic;
   pot         POT's C++ network simplex on the mass-cancelled problem, given the distance matrix;
   emd2        ot.emd2 (the public API that GraphRicciCurvature calls), given the distance matrix;
   ortools     OR-Tools integer min-cost flow (C++), given the distance matrix;
