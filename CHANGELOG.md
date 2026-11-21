@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.3
+
+The version of the arXiv paper. The solver and every number of the paper are unchanged from 1.4.2.
+
+- `artifacts.py`: the explicit-distance oracle (`orcut._reference`) is labelled "oracle", not
+  "previous solver", in the legend of `fig-per-edge-all.pdf` (Figure 3) and in its row of the E4
+  ablation table (Table 3). It is the independent test oracle that shipped alongside 1.0.0, not the
+  1.0.0 kernel (`orcut/_kernels.py`, kept frozen), which `orcut.curvature` reproduces bit for bit.
+- `e2_per_edge.py`: the docstring describes the oracle in the same terms.
+- With the defaults, the output is that of 1.4.2 except for these two labels, in the ablation
+  table's rows of `solver_numbers.tex` and in `fig-per-edge-all.pdf`.
+
 ## 1.4.2
 
 The solver and every number of the paper are unchanged from 1.4.1.
@@ -12,7 +24,7 @@ The solver and every number of the paper are unchanged from 1.4.1.
 
 ## 1.4.1
 
-The version of the arXiv paper. The solver is unchanged from 1.4.0 (the same values); the changes
+The solver is unchanged from 1.4.0 (the same values); the changes
 are in E3's synthetic sweep and in its rows solved in chunks.
 
 - E3's synthetic sweep stops at the sizes that were run (`SYNTH_MAX_N`, `synth_plan`): at average
