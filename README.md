@@ -36,11 +36,13 @@ pytest -q
 ```
 
 ## Versions
+* **1.4.3** (the version of the arXiv paper): the solver and every number are unchanged; the
+  explicit-distance oracle (`orcut._reference`) is labelled "oracle" in Table 3 and Figure 3.
 * **1.4.2**: the solver and every number are unchanged;
   `artifacts.py` draws the figures for other layouts (`--fig-width`, e.g. 6.75 in for ICML's two
   columns) and can name the solver otherwise in legends and labels (`--method-name ours`, for an
   anonymous version). See CHANGELOG.md.
-* **1.4.1** (the version of the arXiv paper): the solver is unchanged (the same values); E3's
+* **1.4.1**: the solver is unchanged (the same values); E3's
   synthetic sweep stops at the sizes that were run, its rows get no POT estimate, and a row solved
   in chunks by several workers sums all its chunks (`tools/check_chunks.py` checks and repairs
   results written before). See CHANGELOG.md.
