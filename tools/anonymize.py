@@ -19,7 +19,11 @@ sentence that names the package on PyPI goes (its page names the authors).
 
 The copy is then rescanned, text and binary files and their paths, for any trace of these names, for
 email addresses, for absolute paths under a user's home or scratch folder, and for links that now
-point to the placeholder (dead, or someone else's); if one is left, nothing is written. The archive has fixed timestamps (no dates
+point to the placeholder (dead, or someone else's); if one is left, nothing is written. Files
+that contain NUL bytes (UTF-16 text, such as the file names in a .DS_Store) are also checked with
+the NUL bytes removed. Desktop metadata (.DS_Store, ._*, Thumbs.db, desktop.ini) is never copied, the
+anonymizer is not mentioned in the copy, the earlier paper's code is not said to be this package's,
+and no venue is named. The archive has fixed timestamps (no dates
 or time zone), so the same tree always gives the same archive, byte for byte.
 
 Usage: python tools/anonymize.py [--out anonymous.zip] [--placeholder anonpkg] [--repo-url URL]
@@ -50,6 +54,18 @@ CONTEXT = [
     # PyPI's page of the package names its authors
     ("package index", r"`?orcut`? is on PyPI as [^\n]*?, but that package is the solver alone; for the experiments"
      r" and everything else beyond the solver, install from this repository\.", "Install from this repository."),
+    # the earlier paper's code: a sentence saying that this package's kernel *is* that code, or that
+    # the code depends on this package, says the two papers share authors, however the code is named
+    ("own earlier code", r"(?s)\*\s*\*\*1\.0\.0\*\*\s+is the solver used for every exact curvature in .*?reproduce that paper\.[ \t]*",
+     "* **1.0.0**: the original block kernel (lazy, non-lazy, LLY and the TLW certificate), kept frozen in\n"
+     "  `orcut/_kernels.py`."),
+    ("own earlier code", r"It is the exact solver of\s+``curvature[\W_]*transfer`` v\d+\s+\([^)]*\),\s+extracted without changes",
+     "It is kept\nwithout changes"),
+    ("own earlier code", r"\s+of\s+``curvature[\W_]*transfer``(?=\.)", ""),
+    ("own earlier code", r"The cascade \(:func:`curvature[\W_]*transfer\.screen`\) now", "The screening cascade now"),
+    ("own earlier code", r"The exact solver of `curvature[\W_]*transfer` v\d+, extracted without changes",
+     "The exact block solver"),
+    ("own earlier code", r"\s*\(the solver of the companion paper\)", ""),
     # the earlier paper, cited in the third person and without its title or link
     ("earlier paper", r"\(the code used for the results of Micaletto and\s+Nigrelli,\s+\"[^\"]*\"\)",
      "(the code of an earlier paper)"),
@@ -62,6 +78,16 @@ CONTEXT = [
     # this paper: no pointer to its non-anonymous preprint, nor to the venue a version was written for
     ("own preprint", r"\bthe\s+arXiv\s+(?:paper|preprint|version)\b", "the paper"),
     ("venue labels", r"[ \t]*\((?:LoG|ICML|NeurIPS|ICLR|KDD|AISTATS|TMLR|AAAI|WWW|SDM)[ \t]*\d{4}[ \t]+version\)", ""),
+    # venues named outside such labels (figure widths): another venue's layout says there is another version
+    ("venue names", r"\(LoG 5\.5, ICML 6\.75\)", "(5.5 by default; 6.75 for two columns)"),
+    ("venue names", r"5\.5 for LoG, the(\s+)default; 6\.75 for ICML, whose two-column figures span the page",
+     r"5.5, the\1default; 6.75 for two columns, whose figures span the page"),
+    ("venue names", r"for ICML's two(\s+)columns", r"for two\1columns"),
+    ("venue names", r"the(\s+)ICML layout", r"a\1two-column layout"),
+    # the anonymizer itself is not copied: no mention of it, of what it removes, or of its archive
+    ("anonymizer", r"`anonymize\.py` \(the anonymized copy for double-blind review\);\s*", ""),
+    ("anonymizer", r"(?ms)^- `tools/anonymize\.py`:.*?(?=^- |^## |\Z)", ""),
+    ("anonymizer", r"(?m)^anonymous\.zip(?:\.tmp)?\n", ""),
     ("copyright", r"Copyright \(c\) (\d{4}) Giorgio Micaletto", r"Copyright (c) \1 Anonymous Authors"),
 ]
 
@@ -85,6 +111,16 @@ ALLOWED = ("@example.org", "@example.com")
 # a user's folder: /home/<user>, /Users/<user>, /scratch/<user>, /scratch/work/<user> (not .../, <user>, $USER)
 USER_PATH = re.compile(r"(?<![\w.~$])/(?:home|Users|scratch(?:/work)?)/(?!\.\.\.|work/|[<${])([A-Za-z][\w.-]*)")
 URL = re.compile(r"https?://[^\s<>\"'`)\]]+")
+# desktop metadata: never copied (a .DS_Store lists the names of the folder it was in, in UTF-16)
+JUNK = re.compile(r"(?:^|/)(?:\.DS_Store|\._[^/]+|Thumbs\.db|desktop\.ini|\.directory)$|(?:^|/)__MACOSX/", re.I)
+# must not be left in the copy at all (checked, never replaced): the name the earlier paper's code gets
+# (a sentence still naming it says how this package relates to that code), the anonymizer and its
+# archive, and venues (case-sensitive, so that "log" is not one)
+FORBIDDEN = [
+    ("the earlier paper's code", re.compile(r"prior[\W_]*code", re.I)),
+    ("the anonymizer", re.compile(r"anonymi[sz]e\.py|anonymous\.zip", re.I)),
+    ("a venue", re.compile(r"(?<![\w-])(?:LoG|ICML|NeurIPS|ICLR|KDD|AISTATS|TMLR|AAAI|SDM|UAI|COLT|CIKM|WSDM)(?![\w-])")),
+]
 
 
 def pattern(term: str, whole_words: bool) -> re.Pattern:
@@ -172,6 +208,10 @@ def main() -> None:
     holder = re.compile(re.escape(a.placeholder), re.IGNORECASE)
 
     files = [f for f in git("ls-files", "-z").split("\0") if f and f != SELF and os.path.isfile(os.path.join(ROOT, f))]
+    junk = [f for f in files if JUNK.search(f)]
+    files = [f for f in files if f not in junk]
+    if junk:
+        print(f"not copied (desktop metadata; untrack it with git rm --cached): {', '.join(junk)}", file=sys.stderr)
     if not files:
         sys.exit("no tracked files: run it inside the git repository")
     entries, counts, leaks = {}, {}, []
@@ -199,6 +239,9 @@ def main() -> None:
         if new in entries:
             sys.exit(f"two files would both become {new}")
         seen = data.decode("utf-8", "replace")
+        if b"\0" in data:  # UTF-16 text (names in a .DS_Store, Windows files) hides from the patterns
+            seen += "\n" + data.replace(b"\0", b"").decode("latin-1")
+        leaks += [(new, f"{m.group(0)!r} ({what})") for what, rx in FORBIDDEN for m in rx.finditer(seen)]
         leaks += [(new, t) for t, rx in checks if rx.search(new) or rx.search(seen)]
         leaks += [(new, e) for e in EMAIL.findall(seen) if not e.lower().endswith(ALLOWED)]
         leaks += [(new, f"/.../{m.group(1)} (a user's folder)") for m in USER_PATH.finditer(seen)
