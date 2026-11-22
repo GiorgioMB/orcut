@@ -2,9 +2,10 @@
 
 This module is the solver as released in orcut 1.0.0. It is the exact solver of
 ``curvature_transfer`` v11 (the code used for the results of Micaletto and
-Nigrelli, "What Balanced Forman Curvature Certifies About Ollivier--Ricci
-Curvature"), extracted without changes to any compiled function, so that every
-value and every code path is identical. New code goes to other modules.
+Nigrelli, "From Proxy to Certificate: Two-Sided Ollivier--Ricci Bounds from
+Balanced Forman Curvature"), extracted without changes to any compiled
+function, so that every value and every code path is identical. New code goes
+to other modules.
 
 Measures. For an edge (i, j) the lazy measures (idleness 1/(deg+1)), the
 non-lazy neighbour laws, and the uniform idleness p = 1/(deg_max + 1), which
