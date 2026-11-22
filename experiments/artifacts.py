@@ -415,22 +415,23 @@ def block_e2c(R, O: Out):
         slopes.append(k)
         last = sub.iloc[-1]
         okp = sub.dropna(subset=["pot_s"]) if "pot_s" in sub else sub.iloc[0:0]
-        potcell, potn = "--", None
+        ourscell, potcell, potn = "--", "--", None
         if len(okp):
             lp = okp.iloc[-1]
             pot.append(((float(lp["pot_s"]) + float(lp.get("build_s", 0.0))) / float(lp["ours_s"]), int(lp["n"])))
-            potcell, potn = f_time(lp["pot_s"] + lp.get("build_s", 0.0)), int(lp["n"])
+            ourscell, potcell, potn = f_time(lp["ours_s"]), f_time(lp["pot_s"] + lp.get("build_s", 0.0)), int(lp["n"])
         if math.isfinite(float(last.get("graphflow_s", float("nan")))):
             gf.append(float(last["graphflow_s"]) / float(last["ours_s"]))
         rows.append(([names.get(kind, kind), f_int(last["n"]), f_int(last["local_input"]), f_int(last["arcs"]),
                       f_time(last["ours_s"]),
                       f_time(last["graphflow_s"]) if math.isfinite(float(last.get("graphflow_s", float("nan")))) else "--",
-                      potcell, f_num(k, 2) if math.isfinite(k) else "--"], potn))
-    # POT's n is the same in every row and goes in the table head (EDasPotMaxN); a cell gives its n only where it differs
+                      ourscell, potcell, f_num(k, 2) if math.isfinite(k) else "--"], potn))
+    # orcut and POT at the largest n with POT: that n is the same in every row and goes in the table head
+    # (EDasPotMaxN); the POT cell gives its n only where it differs
     pot_n = max((n_ for _, n_ in pot), default=None)
     for cells, n_ in rows:
         if n_ is not None and n_ != pot_n:
-            cells[6] += f" ($n={f_int(n_)}$)"
+            cells[7] += f" ($n={f_int(n_)}$)"
         lines.append(" & ".join(cells) + r" \\")
     O.table("dasgupta", lines)
     O.put("EDasMaxN", f_int(g["n"].max()), "e2/dasgupta: largest n")

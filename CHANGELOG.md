@@ -9,9 +9,10 @@ The version of the arXiv paper. The solver and every number of the paper are unc
   ablation table (Table 3). It is the independent test oracle that shipped alongside 1.0.0, not the
   1.0.0 kernel (`orcut/_kernels.py`, kept frozen), which `orcut.curvature` reproduces bit for bit.
 - `e2_per_edge.py`: the docstring describes the oracle in the same terms.
-- `artifacts.py`: the approximations table (Table 7) has no column of graphs per method, and the
-  POT cells of the lower-bound table (Table 1) no longer repeat n, which is the same in every row
-  and goes in the table head (`EDasPotMaxN`); a cell still gives its n where it differs.
+- `artifacts.py`: the approximations table (Table 7) has no column of graphs per method. The
+  lower-bound table (Table 1) gives orcut's time at the largest n with POT next to POT's, so the
+  ratios in the text can be read off it; that n is the same in every row and goes in the table head
+  (`EDasPotMaxN`), and the POT cell gives its n only where it differs.
 - With the defaults, every number is that of 1.4.2; the tables and figures differ only as above.
 
 ## 1.4.2
