@@ -155,6 +155,16 @@ def inputs_fingerprint(out: str) -> str:
         except OSError:
             continue
         h.update(f"{os.path.relpath(p, out)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+    # the calibration across node types and the provenance of the rows (experiments/hardware.py), by
+    # content: the provenance is written again before every run of the artifacts
+    extra = sorted(glob.glob(os.path.join(out, "calib", "**", "*.csv"), recursive=True)
+                   + glob.glob(os.path.join(out, "calib", "*", "cpu.txt"))
+                   + [os.path.join(out, "provenance", f) for f in ("rows.csv", "types.txt", "nodes.txt")])
+    for p in extra:
+        try:
+            h.update(f"{os.path.relpath(p, out)}|{hashlib.sha256(open(p, 'rb').read()).hexdigest()}\n".encode())
+        except OSError:
+            continue
     env = xio.read_json(os.path.join(out, "environment.json"), default=None)
     if isinstance(env, dict):
         h.update(json.dumps({k: v for k, v in env.items() if k not in ("host", "slurm_job")}, sort_keys=True).encode())

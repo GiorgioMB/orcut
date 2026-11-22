@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import re
 import os
 import shutil
 import signal
@@ -65,8 +66,100 @@ STEPS = {
     "e5-sinkhorn": (["e5_approx.py", "--part", "sinkhorn"], "entropic OT: time against error"),
     "e6-measures": (["e6_generality.py", "--part", "measures"], "other one-step measures"),
     "e6-radius": (["e6_generality.py", "--part", "radius"], "balls and multi-step walks (layered closure)"),
+    "calib": (["e3_scale.py", "--part", "real"], "calibration: two graphs timed again on this type of node"),
 }
-THREADED = {"e3-real", "e3-threads", "e3-synth", "e5-whole", "e6-measures", "e6-radius"}
+THREADED = {"e3-real", "e3-threads", "e3-synth", "e5-whole", "e6-measures", "e6-radius", "calib"}
+
+# Calibration across node types (experiments/hardware.py): the step "calib" times these graphs with
+# E3's protocol on the node it runs on, into <out>/calib/<processor>/, so that a run on each type of
+# node (array.sbatch: --array=12 --constraint=<type>) adds that type. --quick: bundled graphs.
+CALIB_GRAPHS = ["real:DBLP", "real:Epinions"]
+CALIB_QUICK_GRAPHS = ["bundled:karate", "bundled:jazz"]
+CALIB_ARGS = ["--reps", "3", "--pot-per-bin", "20"]
+CALIB_QUICK_ARGS = ["--reps", "1", "--pot-per-bin", "5"]  # e3's own --quick would replace the graphs
+
+
+def cpu_model() -> str:
+    """The processor of this node, as the operating system names it."""
+    try:
+        return next(l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name"))
+    except (OSError, StopIteration):
+        import platform
+        return platform.processor() or "unknown processor"
+
+
+def cpu_name(model: str) -> str:
+    """'Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz' -> 'Xeon Gold 6248'; 'AMD EPYC 7713 64-Core Processor' -> 'EPYC 7713'."""
+    s = re.sub(r"\((R|TM)\)|@.*$|\b\d+-Core\b|\bProcessor\b|\bCPU\b", " ", model)
+    s = re.sub(r"^\s*(Intel|AMD)\b", " ", s)
+    return " ".join(s.split()) or model.strip()
+
+
+def cpu_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "unknown"
+
+
+def _calib_dir(out: str) -> str:
+    return os.path.join(out, "calib", cpu_slug(cpu_name(cpu_model())))
+
+
+def record_node(out: str) -> None:
+    """Add this node and its processor to <out>/provenance/nodes.txt (read by experiments/hardware.py),
+    so that the provenance of the rows needs no list of node types."""
+    try:
+        path = os.path.join(out, "provenance", "nodes.txt")
+        host, cpu = socket.gethostname().split(".")[0], cpu_name(cpu_model())
+        known = open(path).read().split("\n") if os.path.exists(path) else []
+        if f"{host} {cpu}" not in known:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a") as fh:
+                fh.write(f"{host} {cpu}\n")
+    except OSError as ex:  # the record must never block a run
+        common.log(f"could not record the node: {ex}")
+
+
+def _provenance(a) -> None:
+    """Before the artifacts: which node produced each row (tools/provenance.py), from the logs and the
+    scheduler's records, if Slurm's sacct is there; otherwise nothing (and the table is left out)."""
+    logs = os.path.join(a.out, "logs")
+    if not shutil.which("sacct") or not os.path.isdir(logs):
+        return
+    try:
+        days = sorted(m.group(1) for f in glob.glob(os.path.join(logs, "*.log"))
+                      for m in re.finditer(r"^===== (\d{4}-\d\d-\d\d)", open(f, errors="replace").read(), re.M))
+        if not days:
+            return
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        res = subprocess.run(["sacct", "-u", user, "-S", days[0], "-X", "-n", "-o",
+                              "JobID%25,JobName%25,NodeList%20,Start,End"], capture_output=True, text=True, timeout=300)
+        if res.returncode != 0:
+            common.log(f"[artifacts] provenance skipped: sacct failed ({res.stderr.strip()[:200]})")
+            return
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
+        import provenance as PV
+        d = os.path.join(a.out, "provenance")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "sacct.txt"), "w") as fh:
+            fh.write(res.stdout)
+        jobs = PV.read_sacct(os.path.join(d, "sacct.txt"))
+        rows = []
+        for step in PV.STEPS:
+            log = os.path.join(logs, f"{step}.log")
+            if os.path.exists(log):
+                rows += PV.trace(step, log, jobs)
+        import io, csv as _csv
+        buf = io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=["step", "key", "written", "jobs", "nodes"], lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+        path = os.path.join(d, "rows.csv")
+        if not os.path.exists(path) or open(path).read() != buf.getvalue():  # unchanged: the artifacts need not run
+            with open(path + ".tmp", "w") as fh:
+                fh.write(buf.getvalue())
+            os.replace(path + ".tmp", path)
+        common.log(f"[artifacts] provenance: {len(rows)} rows traced to their node ({path})")
+    except Exception as ex:  # the provenance must never block the artifacts
+        common.log(f"[artifacts] provenance skipped: {ex}")
 GRC = {"e5-whole"}
 
 # 1.4.0 removed the downstream experiment (then E6) and renamed E7 to E6; results written before
@@ -189,6 +282,7 @@ STEP_OUTPUTS = {
     "e5-sinkhorn": ["e5/sinkhorn.csv"],
     "e6-measures": ["e6/measures.csv"],
     "e6-radius": ["e6/radius.csv"],
+    "calib": [],  # calib/<this node's processor>/, found by _step_outputs
 }
 
 
@@ -199,6 +293,8 @@ def _step_outputs(step, out):
         files += [f for f in chunks if not os.path.basename(f).startswith("synth.")]
     elif step == "e3-synth":
         files += [f for f in chunks if os.path.basename(f).startswith("synth.")]
+    elif step == "calib":
+        files += glob.glob(os.path.join(_calib_dir(out), "**", "*"), recursive=True)
     return sorted(f for f in set(files) if os.path.isfile(f))
 
 
@@ -431,14 +527,22 @@ def _command(step, a, steps):
             cmd += ["--provisional"]
         return cmd
     script, *args = steps[step][0]
-    cmd = [sys.executable, os.path.join(HERE, script), *args, "--out", a.out]
+    out = a.out
+    if step == "calib":
+        out = _calib_dir(a.out)
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, "cpu.txt"), "w") as fh:
+            fh.write(cpu_name(cpu_model()) + "\n")
+        args = args + (["--graphs", *CALIB_QUICK_GRAPHS, *CALIB_QUICK_ARGS] if a.quick
+                       else ["--graphs", *CALIB_GRAPHS, *CALIB_ARGS])
+    cmd = [sys.executable, os.path.join(HERE, script), *args, "--out", out]
     if a.data_dir:
         cmd += ["--data-dir", a.data_dir]
     if step in THREADED:
         cmd += ["--threads", str(a.threads)]
     if step in GRC and a.grc_python:
         cmd += ["--grc-python", a.grc_python]
-    if a.quick:
+    if a.quick and step != "calib":
         cmd += ["--quick"]
     return cmd + list(getattr(a, "step_args", []))
 
@@ -505,6 +609,8 @@ def _config(step, a):
     if step == "artifacts":
         cfg["paper_dir"] = a.paper_dir
         cfg["inputs"] = CK.inputs_fingerprint(a.out)
+    if step == "calib":
+        cfg["cpu"] = cpu_slug(cpu_name(cpu_model()))  # each type of node has its own calibration
     return cfg
 
 
@@ -542,7 +648,7 @@ def _run(cmd, log_path, lock, env=None) -> int:
     """Run one step and return its exit code, touching its lock every HEARTBEAT_S seconds. If
     main.py is stopped meanwhile (Stopped, KeyboardInterrupt), the step is terminated first."""
     with open(log_path, "a") as fh:
-        fh.write(f"\n===== {CK.now()} {' '.join(cmd)}\n")
+        fh.write(f"\n===== {CK.now()} {' '.join(cmd)}  [host {socket.gethostname().split('.')[0]}, {cpu_name(cpu_model())}]\n")
         fh.flush()
         p = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env)
         try:
@@ -644,6 +750,7 @@ def main(argv=None, steps=None) -> int:
     try:
         env = common.environment()
         common.xio.atomic_json(env, os.path.join(a.out, "environment.json"))
+        record_node(a.out)  # every step of this run runs here; before any fingerprint of the artifacts
     except Exception as ex:  # environment capture must never block a run
         common.log(f"could not record the environment: {ex}")
     handlers = {sig: signal.signal(sig, _stop) for sig in (signal.SIGTERM, signal.SIGINT)}
@@ -659,6 +766,8 @@ def main(argv=None, steps=None) -> int:
 def _pipeline(a, selected, table, env) -> int:
     outcome = {}
     for step in selected:
+        if step == "artifacts":
+            _provenance(a)
         cfg = _config(step, a)
         rec = CK.load(a.out, step)
         ok, diff = CK.done(rec, cfg)

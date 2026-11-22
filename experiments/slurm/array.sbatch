@@ -5,7 +5,8 @@
 #   sbatch --array=9 experiments/slurm/array.sbatch --force -- --budget 3600 # and those after -- to the step
 #   python experiments/main.py --steps artifacts --out results               # when all tasks are done
 # Steps (index: step): 0 e1, 1 e2-controlled, 2 e2-real, 3 e2-dasgupta, 4 e3-real, 5 e3-threads,
-# 6 e3-synth, 7 e4, 8 e5-whole, 9 e5-sinkhorn, 10 e6-measures, 11 e6-radius; every step resumes
+# 6 e3-synth, 7 e4, 8 e5-whole, 9 e5-sinkhorn, 10 e6-measures, 11 e6-radius, 12 calib (on the
+# type of node it lands on; for another type: sbatch --array=12 --constraint=<type>); every step resumes
 # where it stopped if resubmitted. (Up to 1.3, 10 and 11 were E6, now removed, and E7 was 12, 13.)
 #
 # Environments (no need to activate either before sbatch):
@@ -17,7 +18,7 @@
 #              if GraphRicciCurvature does not import there.
 # ORCUT_DATA and ORCUT_RESULTS as in run_all.sbatch; ORCUT_ROOT sets the repository.
 #SBATCH --job-name=orcut-step
-#SBATCH --array=0-11
+#SBATCH --array=0-12
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
@@ -41,7 +42,7 @@ fi
 [ -n "$ROOT" ] && [ -f "$ROOT/experiments/main.py" ] || {
   echo "cannot find the orcut repository: sbatch from its root, or set ORCUT_ROOT" >&2; exit 2; }
 cd "$ROOT"
-STEPS=(e1 e2-controlled e2-real e2-dasgupta e3-real e3-threads e3-synth e4 e5-whole e5-sinkhorn e6-measures e6-radius)
+STEPS=(e1 e2-controlled e2-real e2-dasgupta e3-real e3-threads e3-synth e4 e5-whole e5-sinkhorn e6-measures e6-radius calib)
 STEP="${STEPS[$SLURM_ARRAY_TASK_ID]}"
 GRC_STEPS=" e5-whole "   # the steps that also run GraphRicciCurvature
 

@@ -16,6 +16,7 @@ Usage: python artifacts.py [--results results] [--paper-dir results/paper] [--pr
 from __future__ import annotations
 
 import argparse
+import sys
 import math
 import os
 import traceback
@@ -24,6 +25,7 @@ from typing import Dict, List
 import numpy as np
 
 import common
+import hardware  # calibration across node types and provenance of rows (optional inputs)
 import xio
 
 
@@ -805,7 +807,9 @@ def main():
                      ("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
                      ("E2C", lambda: block_e2c(a.results, O)),
                      ("E3", lambda: block_e3(a.results, O, paper)), ("E4", lambda: block_e4(a.results, O)),
-                     ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O))):
+                     ("E5", lambda: block_e5(a.results, O, paper)), ("E6", lambda: block_e6(a.results, O)),
+                     ("calibration", lambda: hardware.block_calib(a.results, O, sys.modules[__name__])),
+                     ("provenance", lambda: hardware.block_provenance(a.results, O, sys.modules[__name__]))):
         try:
             fn()
         except FileNotFoundError as ex:

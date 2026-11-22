@@ -36,7 +36,11 @@ pytest -q
 ```
 
 ## Versions
-* **1.4.3** (the version of the arXiv paper): the solver and every number are unchanged; the
+* **1.4.4** (the version of the arXiv paper): the solver and every number are unchanged; the
+  paper also reports how much the type of node moves its times (a calibration across node types)
+  and which processor produced each row (`tools/provenance.py`, from the logs and the scheduler's
+  records). See CHANGELOG.md.
+* **1.4.3**: the solver and every number are unchanged; the
   explicit-distance oracle (`orcut._reference`) is labelled "oracle" in Table 3 and Figure 3.
 * **1.4.2**: the solver and every number are unchanged;
   `artifacts.py` draws the figures for other layouts (`--fig-width`, e.g. 6.75 in for ICML's two
@@ -88,4 +92,4 @@ pytest -q
 | `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `affected_edges`, `exact` (1.0.0 API), thread control |
 | `tests/` | kernels against each other (bit for bit), against the oracle, and against linear programming |
 | `experiments/` | the experiments of the paper, E1 to E6 (see `experiments/README.md`) |
-| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically); `check_chunks.py` (E3's rows solved in chunks against their saved chunks) |
+| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically); `check_chunks.py` (E3's rows solved in chunks against their saved chunks); `provenance.py` (the node behind each row, from the logs and the scheduler's records) |

@@ -10,3 +10,6 @@ results-quick/
 experiments/data/real/
 anonymous.zip
 anonymous.zip.tmp
+
+# macOS folder metadata
+.DS_Store

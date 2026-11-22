@@ -1,8 +1,40 @@
 # Changelog
 
+## 1.4.4
+
+The version of the arXiv paper. The solver and every number of the paper are unchanged from 1.4.3;
+the paper also reports what the type of node does to them.
+
+- `experiments/hardware.py`, called by `artifacts.py`, with two optional inputs; without them the
+  output is byte for byte that of 1.4.3.
+  - Calibration across node types: a few graphs timed again on one node of each type with E3's
+    protocol, in `results/calib/<type>/` (a `cpu.txt` there names the processor). Table `calib`;
+    keys `ECalib...` (the largest spreads of our time, of POT's estimate, and of their ratio, and the
+    range of POT's solve alone over our time).
+  - Provenance: `results/provenance/rows.csv` from `tools/provenance.py`, with
+    `results/provenance/types.txt` naming the processor of each kind of node. Table `provenance`
+    (rows per processor and step); keys `EProvRows`, `EProvOpen`, and, for E4, E5 and E6, whose
+    comparisons span several rows of a graph, `EProv<Step>Graphs` and `EProv<Step>Mixed`.
+- `tools/provenance.py`: attributes every row of every step to the jobs of its step that were
+  running when its last log line was written (the step's index in `array.sbatch`, read from the
+  script its run named: up to 1.3, E6 was E7, tasks 12 and 13; or `orcut-all`). Workers of one step
+  on different types of node at the same moment leave a row open.
+- `experiments/main.py` produces both in a run:
+  - the step `calib` (task 12 of `array.sbatch`, which now runs tasks 0 to 12; tasks 0 to 11 are
+    unchanged) times DBLP and Epinions with E3's protocol on the node it runs on, into
+    `results/calib/<processor>/` with its `cpu.txt`; a run on another type of node is another
+    calibration (`--quick`: Karate and Jazz, one run);
+  - every run records its node and processor in `results/provenance/nodes.txt`, and each step's
+    log header now names the node and its processor;
+  - before the artifacts, when `sacct` is there, it writes `results/provenance/rows.csv`
+    (`tools/provenance.py`), only if it changed;
+  - the artifacts run again when the calibration or the provenance change (by content).
+- `experiments/README.md`: the calibration and the provenance.
+- `.DS_Store` files (macOS folder metadata) are no longer tracked, and are ignored.
+
 ## 1.4.3
 
-The version of the arXiv paper. The solver and every number of the paper are unchanged from 1.4.2.
+The solver and every number of the paper are unchanged from 1.4.2.
 
 - `artifacts.py`: the explicit-distance oracle (`orcut._reference`) is labelled "oracle", not
   "previous solver", in the legend of `fig-per-edge-all.pdf` (Figure 3) and in its row of the E4

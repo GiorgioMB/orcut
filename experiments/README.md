@@ -154,6 +154,35 @@ this against full recomputation.
 tables), after which it is reported as not finished rather than extrapolated, except for the POT
 estimate of E3, which is extrapolated by construction and labelled as such.
 
+## Calibration across node types, and the node behind each row
+
+A step that stops at a time limit resumes on whichever node is free, so on a heterogeneous cluster
+the rows of a table can come from different processors. Two optional inputs of `artifacts.py`
+(`experiments/hardware.py`) say how much that matters; without them it produces neither.
+
+Both come with a run of `main.py`:
+
+*Calibration.* The step `calib` (task 12 of `array.sbatch`) times DBLP and Epinions again with
+E3's protocol on the node it runs on, into `results/calib/<processor>/` with a `cpu.txt` naming
+the processor; a run on each type of node adds that type (`--quick`: Karate and Jazz):
+
+```bash
+for c in typeA typeB typeC; do sbatch --array=12 --constraint=$c experiments/slurm/array.sbatch; done
+```
+
+*Provenance.* Every run of `main.py` records its node and processor in
+`results/provenance/nodes.txt`, and its step logs say on which node each run ran. Before the
+artifacts, when Slurm's `sacct` is there, `main.py` traces every row of every step to the jobs of
+its step that were running when the row was written (`tools/provenance.py`), into
+`results/provenance/rows.csv`. For runs before 1.4.4, `results/provenance/types.txt` names the
+processor of each kind of node, one line each: the letters that start its node names, then the
+processor. By hand:
+
+```bash
+sacct -u $USER -S <first day> -X -n -o JobID%25,JobName%25,NodeList%20,Start,End > sacct.txt
+python tools/provenance.py --logs results/logs --sacct sacct.txt --out results/provenance/rows.csv
+```
+
 ## Outputs
 
 ```
