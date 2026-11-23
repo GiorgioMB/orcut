@@ -1,6 +1,6 @@
 # Environment for the GraphRicciCurvature baseline (experiments/grc_runner.py). GRC 0.6.1 caps
-# scipy <= 1.13.1, so it cannot share the orcut environment. Everything below is on conda-forge
-# except GRC itself, which is pure Python (one wheel, no compiled code), installed with pip:
+# scipy <= 1.13.1, it cannot share the orcut environment. Everything below is on conda-forge
+# except GRC itself, installed with pip:
 #
 #   conda env create -f experiments/grc-environment.yml      # next to the orcut environment
 #   conda activate orcut-grc
