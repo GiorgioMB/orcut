@@ -128,7 +128,7 @@ def block_provenance(results: str, O, A) -> None:
     total = undetermined = 0
     for r in csv.DictReader(open(rows_path)):
         cpu = processor(r["nodes"], types, hosts)
-        per_step[r["step"]][cpu or "not determined"] += 1
+        per_step[r["step"]][cpu or "ND"] += 1
         graphs[r["step"]][r["key"].split(" | ")[0]].add(cpu or "?")
         total += 1
         undetermined += not cpu
@@ -137,7 +137,7 @@ def block_provenance(results: str, O, A) -> None:
         if step not in per_step:
             continue
         c = per_step[step]
-        cells = ", ".join(f"{A.tex_name(cpu)} ({n})" for cpu, n in sorted(c.items(), key=lambda x: (x[0] == "not determined", -x[1])))
+        cells = ", ".join(f"{A.tex_name(cpu)} ({n})" for cpu, n in sorted(c.items(), key=lambda x: (x[0] == "ND", -x[1])))
         lines.append(f"{name} & {cells} \\\\")
         if stem:
             g = graphs[step]

@@ -67,7 +67,7 @@ def test_provenance_from_logs_and_sacct(tmp_path):
     (prov / "types.txt").write_text("abc Processor A\nxyz Processor B\n")
     O = A.Out(False)
     hardware.block_provenance(str(tmp_path / "results"), O, A)
-    assert "E4 & Processor A (2), not determined (1)" in O.rows["provenance"]
+    assert "E4 & Processor A (2), ND (1)" in O.rows["provenance"]
     assert O.keys["EProvRows"] == "3" and O.keys["EProvOpen"] == "1"
     assert O.keys["EProvFourGraphs"] == "2" and O.keys["EProvFourMixed"] == "0"  # abc1 and abc3: one processor
     rows["ER(20k, 20) | full"]["nodes"] = "xyz9"  # the same graph's rows on two processors

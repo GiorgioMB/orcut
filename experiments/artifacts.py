@@ -65,14 +65,12 @@ def _f_num(x, sig: int = 3) -> str:
     if x == 0:
         return "0"
     mag = math.floor(math.log10(abs(x)))
-    if mag < -3:
+    if mag < -3 or mag >= 5:
         return _f_sci(x, sig)
-    if mag >= 5:
-        m = x / 10 ** mag
-        return rf"{m:.{max(0, sig - 1)}f}\times10^{{{mag}}}"
     dec = max(0, sig - 1 - mag)
-    s = f"{x:,.{dec}f}".replace(",", "{,}")
-    return s
+    if dec and abs(round(x, dec)) >= 10.0 ** (mag + 1):  # rounding carries a digit: 0.9996 -> 1.0, not 1.00
+        dec -= 1
+    return f"{x:,.{dec}f}".replace(",", "{,}")
 
 
 def nanstat(fn, x) -> float:
@@ -94,7 +92,9 @@ def _f_sci(x, sig: int = 2) -> str:
     if x == 0:
         return "0"
     mag = math.floor(math.log10(abs(x)))
-    m = x / 10 ** mag
+    m = round(x / 10 ** mag, sig - 1)
+    if abs(m) >= 10:  # rounding carries a digit: 9.996e5 -> 1.00e6, not 10.00e5
+        mag, m = mag + 1, m / 10
     return rf"{m:.{sig - 1}f}\times10^{{{mag}}}"
 
 
@@ -702,9 +702,9 @@ def block_e5(R, O: Out, figdir: str):
                 ax.axvline(float(o["time_edge_weighted_s"].iloc[0]), color=col, ls=":", lw=0.9)
             handles.append(Line2D([], [], color=col, ls=ls, lw=1.2, label=gname))
         handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label=f"{METHOD} (exact)"))
-        ax.add_artist(ax.legend(handles=[Line2D([], [], ls="none", marker=marks[r], ms=4, color="0.25", label=f"{r:g}")
-                                         for r in regs], title=r"Sinkhorn, $\varepsilon$", loc="upper right",
-                                fontsize=7, title_fontsize=7, frameon=False, handletextpad=0.3))
+        ax.legend(handles=[Line2D([], [], ls="none", marker=marks[r], ms=4, color="0.25", label=f"{r:g}") for r in regs],
+                  title=r"Sinkhorn, $\varepsilon$", loc="upper right", fontsize=7, title_fontsize=7, frameon=False,
+                  handletextpad=0.3)
         ax.set_xlabel("seconds per edge (one thread)", fontsize=8)
         ax.set_ylabel("mean absolute error", fontsize=8)
         ax.tick_params(labelsize=7)
@@ -757,8 +757,7 @@ def block_e6(R, O: Out):
             kind, rr = cfg.split(" r=")
             label = ("uniform on $B_{%s}$" if kind == "ball" else "%s-step lazy walk") % rr
             lines.append(f"{label} & {f_num(nanstat(np.nanmedian, r), 2)} & {f_num(nanstat(np.nanmin, r), 2)}--{f_num(nanstat(np.nanmax, r), 2)}"
-                         f" & {f_sci(nanstat(np.nanmax, sub['max_diff_vs_pot'].astype(float)))}"
-                         f" & {f_pct(nanstat(np.nanmin, sub['certified_share'].astype(float)), 0)}" + r" \\")
+                         f" & {f_sci(nanstat(np.nanmax, sub['max_diff_vs_pot'].astype(float)))}" + r" \\")
         O.table("radius", lines)
         O.put("ESixCertifiedMin", f_pct(nanstat(np.nanmin, d["certified_share"].astype(float)), 0), "e6/radius: min certified share")
         r2 = d[d["config"] == "ball r=2"]
