@@ -1,24 +1,13 @@
-"""Baselines: exact solvers on explicit local distance matrices, approximations, and proxies.
+"""Baselines: exact solvers on explicit local distance matrices, graph min-cost flow, GRC, proxies.
 
-Local problems. For an edge (i, j), ``local_problem`` builds the two measures on
-S = N(i) u N(j) and the |S| x |S| hop-distance matrix with the numba kernels of
-:mod:`orcut._reference` (distances 0..3 from adjacency and 2-paths), the fastest way we know to give
-a general-purpose solver its input. ``net=True`` cancels the common mass (P x N submatrix), which
-POT's network simplex usually solves faster.
-
-Exact solvers on (a, b, M): POT's C++ network simplex (``emd_c``, the routine behind ``ot.emd``) and
-its public wrapper ``ot.emd2`` (what GraphRicciCurvature calls), OR-Tools' integer min-cost flow
-(cost scaling, C++), and HiGHS through ``scipy.optimize.linprog`` (small problems only).
-
-Distance-free exact baseline: the min-cost flow on the local graph (Beckmann's formulation of W1
-on a graph metric), with OR-Tools (:class:`GraphFlowProblems`).
-
-Approximations: entropic OT (POT ``sinkhorn2``, log-domain). Proxies (one pass over the 2-hop
-structure): Balanced Forman curvature (Topping et al., 2022), the triangle-augmented Forman curvature
-AF3 = 4 - d_i - d_j + 3 t (Fesser and Weber, 2024), and the Jost--Liu bounds and their mean
-(the surrogate of Tian, Lubberts and Weber, 2025).
-
-GraphRicciCurvature needs scipy <= 1.13 and runs in its own environment (``grc_runner.py``).
+``LocalProblems`` builds the mass-cancelled transport problem of an edge (P x N) with the distance
+kernels of :mod:`orcut._reference`, the fastest input we know how to give a general-purpose solver;
+on it run POT's C++ network simplex (``emd_c``, behind ``ot.emd``), ``ot.emd2`` (what
+GraphRicciCurvature calls), OR-Tools' integer min-cost flow, HiGHS, and entropic OT (POT).
+``GraphFlowProblems``: W1 as a min-cost flow on the graph itself (Beckmann), with no distance
+matrix. ``grc``: GraphRicciCurvature, in its own environment (``grc_runner.py``). ``proxies``:
+Balanced Forman (Topping et al., 2022), AF3 = 4 - d_i - d_j + 3 t (Fesser and Weber, 2024), and the
+Jost--Liu bounds and their mean (the surrogate of Tian, Lubberts and Weber, 2025).
 """
 from __future__ import annotations
 
@@ -28,7 +17,7 @@ import subprocess
 import tempfile
 import time
 import warnings
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 from numba import njit, prange
@@ -171,8 +160,8 @@ def _solve(method, a, b, M, L, aint, bint, reg=None) -> float:
     return EXACT[method](a, b, M)
 
 
-def run_local(g, ids, method: str, kind: str = "lazy", net: bool = True, reps: int = 3, include_build: bool = False,
-              reg: Optional[float] = None, budget_s: Optional[float] = None, times: Optional[np.ndarray] = None,
+def run_local(g, ids, method: str, kind: str = "lazy", net: bool = True, reps: int = 3, reg: Optional[float] = None,
+              budget_s: Optional[float] = None, times: Optional[np.ndarray] = None,
               btimes: Optional[np.ndarray] = None, max_pairs: Optional[float] = None):
     """Per-edge curvature and time of a local-problem method on edges[ids].
 
@@ -367,17 +356,13 @@ def grc_python(explicit: Optional[str] = None) -> Optional[str]:
 
 
 def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: Optional[str], state_dir: str,
-                chunk_s: float = 3600.0, log=None, budget_s: Optional[float] = None, apsp: str = "grc"):
+                chunk_s: float = 3600.0, log=None):
     """GraphRicciCurvature on all edges of ``g`` in contiguous chunks of edges (``grc`` with ``ids``),
     each saved to ``state_dir`` as soon as it is computed, so that a run stopped in the middle (time
     limit, node failure) resumes at the next chunk. The first chunk is small (1% of the edges, at
     least 500); the next are sized from the time per edge so far to take about ``chunk_s`` seconds
-    (at least 500 edges: every call pays GRC's start-up).
-    With ``budget_s``, no chunk starts once GRC's time so far reaches it (the last one is sized to end
-    near it): the status is then "partial", the values of the edges not computed are NaN, and the
-    seconds spent are a lower bound on GRC's time for all edges; a later call with a larger budget
-    continues from the saved chunks. Returns (values aligned with g.edges, GRC's seconds summed over
-    the chunks, status, chunks, edges computed); on an error the chunks done so far stay saved."""
+    (at least 500 edges: every call pays GRC's start-up). Returns (values aligned with g.edges, GRC's
+    seconds summed over the chunks, status, chunks); on an error the chunks done so far stay saved."""
     import xio
 
     os.makedirs(state_dir, exist_ok=True)
@@ -390,16 +375,11 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
     done = max((c[1] for c in state["chunks"]), default=0)
     while done < m:
         spent = sum(c[2] for c in state["chunks"])
-        if budget_s is not None and spent >= budget_s:
-            break
         size = max(500, m // 100) if done == 0 else max(500, int(chunk_s * done / max(spent, 1e-9)))
-        if budget_s is not None and done:
-            size = min(size, max(500, int((budget_s - spent) * done / max(spent, 1e-9))))
-        lo, hi = done, min(m, done + max(1, size))
-        val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64),
-                             apsp=apsp)
+        lo, hi = done, min(m, done + size)
+        val, t, status = grc(g, method, alpha, nbr_topk, proc, python, ids=np.arange(lo, hi, dtype=np.int64))
         if status != "ok":
-            return None, float("nan"), status, len(state["chunks"]), done
+            return None, float("nan"), status, len(state["chunks"])
         np.save(os.path.join(state_dir, f"{lo}.npy"), val)
         state["chunks"].append([lo, hi, float(t)])
         xio.atomic_json(state, path)
@@ -411,22 +391,15 @@ def grc_chunked(g, method: str, alpha: float, nbr_topk: int, proc: int, python: 
     vals = np.full(m, np.nan)
     for lo, hi, _ in state["chunks"]:
         vals[lo:hi] = np.load(os.path.join(state_dir, f"{lo}.npy"))
-    return vals, float(sum(c[2] for c in state["chunks"])), ("ok" if done >= m else "partial"), len(state["chunks"]), done
+    return vals, float(sum(c[2] for c in state["chunks"])), "ok", len(state["chunks"])
 
 
-GRC_APSP_BYTES = {"grc": 48.0, "array": 16.0}  # peak bytes per vertex pair of the all-pairs table (n^2)
-
-
-def grc_atd_need(n: int, apsp: str = "grc") -> float:
-    """Bytes GraphRicciCurvature's ATD needs at its peak, for its all-pairs distances (and 1 GiB for
-    the rest of the GRC process). GRC 0.6.1 (``apsp="grc"``) calls NetworKit's APSP and converts its
-    C++ table (8 n^2 bytes) to a list of lists of Python floats (40 n^2: 32-byte float objects and
-    8-byte pointers) before the table is freed, then to an array: 48 n^2 bytes at the peak, measured
-    with NetworKit 11.2 and Python 3.12 (the whole GRC process tree, n = 3000 to 6500): 258 GB for
-    Epinions, more than a 300 GB job plans for (partial.MEM_SHARE). ``apsp="array"``
-    (``grc_runner.py --apsp-array``) takes NetworKit's table as an array directly
-    (``getDistances(asarray=True)``): 16 n^2, the same distances."""
-    return GRC_APSP_BYTES[apsp] * n * n + 2.0**30
+def grc_atd_need(n: int) -> float:
+    """Bytes GraphRicciCurvature's ATD needs at its peak, for its all-pairs distances, plus 1 GiB for
+    the rest of the GRC process. GRC 0.6.1 converts NetworKit's C++ table (8 n^2 bytes) to a list of
+    lists of Python floats (40 n^2) before the table is freed: 48 n^2 bytes at the peak, measured on
+    the whole GRC process tree (258 GB for Epinions)."""
+    return 48.0 * n * n + 2.0**30
 
 
 def grc_atd_skipped(need: float) -> str:
@@ -437,7 +410,7 @@ def grc_atd_skipped(need: float) -> str:
             f"the job has {(PT.memory_limit() or 0) / 2**30:.0f} GB")
 
 
-def grc_row_fields(status: str, n: Optional[int] = None, apsp: str = "grc") -> dict:
+def grc_row_fields(status: str, n: Optional[int] = None) -> dict:
     """Columns that let a later job with more memory run a GRC row again (``partial.retry_now``):
     the job's memory for a run killed at it, what it needs for an ATD row skipped for memory."""
     import partial as PT
@@ -445,7 +418,7 @@ def grc_row_fields(status: str, n: Optional[int] = None, apsp: str = "grc") -> d
     if status.startswith("out of memory"):
         return {"mem_bytes": PT.memory_limit()}
     if status.startswith("skipped: needs") and n is not None:
-        return {"need_bytes": grc_atd_need(n, apsp)}
+        return {"need_bytes": grc_atd_need(n)}
     return {}
 
 
@@ -476,13 +449,13 @@ def _grc_failure(rc: int, err: str, oom_before: Optional[int]) -> str:
 
 def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3000, proc: int = 1,
         python: Optional[str] = None, timeout: Optional[float] = None, ids: Optional[np.ndarray] = None,
-        shortest_path: str = "auto", workdir: Optional[str] = None, apsp: str = "grc"):
+        shortest_path: str = "auto", workdir: Optional[str] = None):
     """GraphRicciCurvature on graph ``g`` (all edges, or ``ids``) through ``grc_runner.py`` in its own
     environment. Returns (values aligned with g.edges[ids], wall seconds, status) with status "ok",
     "timeout", "unavailable", "skipped: needs ..." (ATD whose all-pairs table does not fit in the
     job's memory), "out of memory with ..." (killed at the job's memory limit) or "error: ...";
     values is None unless status is "ok". On timeout the whole process group (GRC's worker pool
-    included) is killed. ``apsp`` (ATD only): how the all-pairs table is built (``grc_atd_need``)."""
+    included) is killed."""
     import partial as PT
 
     py = grc_python(python)
@@ -492,7 +465,7 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
         # GraphRicciCurvature's ATD always reads the all-pairs distance table, which its pairwise mode
         # (the runner's choice above 20000 vertices) never builds: it then fails with a KeyError on the
         # first vertex. Give it all pairs, when they fit in the job's memory.
-        need, avail = grc_atd_need(g.num_nodes, apsp), PT.memory_available()
+        need, avail = grc_atd_need(g.num_nodes), PT.memory_available()
         if avail is not None and need > avail:
             return None, float("nan"), grc_atd_skipped(need)
         shortest_path = "all_pairs"
@@ -503,8 +476,6 @@ def grc(g, method: str = "OTDSinkhornMix", alpha: float = 0.5, nbr_topk: int = 3
         if ids is not None:
             np.save(os.path.join(d, "ids.npy"), np.asarray(ids, np.int64))
             cmd += ["--ids", os.path.join(d, "ids.npy")]
-        if method == "ATD" and apsp == "array":
-            cmd += ["--apsp-array"]
         oom_before = PT.oom_kill_count()
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
@@ -537,8 +508,6 @@ def _proxy_edge(indptr, indices, i, j, stamp, ep, cnt, out):
             t += 1
             stamp[x] = 2 * ep  # common neighbour
     # U_i = N(i) \ (N(j) u {j}), U_j = N(j) \ (N(i) u {i}); count cross adjacency in both directions
-    nUi = di - 1 - t
-    nUj = dj - 1 - t
     xi_i = 0
     xi_j = 0
     varpi = 0
@@ -597,27 +566,6 @@ def _proxies(indptr, indices, edges, nch):
         for k in range(c, M, nch):
             _proxy_edge(indptr, indices, edges[k, 0], edges[k, 1], stamp, k, cnt, out[k])
     return out
-
-
-@njit(cache=True)
-def _proxies_ids(indptr, indices, edges, ids):
-    n = indptr.shape[0] - 1
-    out = np.zeros((ids.shape[0], 6))
-    stamp = np.full(n, -1, np.int64)
-    cnt = np.zeros(n, np.int64)
-    for k in range(ids.shape[0]):
-        e = ids[k]
-        _proxy_edge(indptr, indices, edges[e, 0], edges[e, 1], stamp, k, cnt, out[k])
-    return out
-
-
-PROXY_COL = {"bf": 0, "af3": 1, "jl_lower": 2, "jl_upper": 3, "jl_mean": 4, "triangles": 5}
-
-
-def proxies_ids(indptr, indices, edges, ids, key: str) -> np.ndarray:
-    """One proxy (a key of :func:`proxies`) for the edges ``edges[ids]`` of the graph (indptr,
-    indices), single-threaded (used for incremental updates on a changing graph)."""
-    return _proxies_ids(indptr, indices, edges, np.ascontiguousarray(ids, dtype=np.int64))[:, PROXY_COL[key]]
 
 
 def proxies(g, nchunks: Optional[int] = None) -> Dict[str, np.ndarray]:

@@ -139,13 +139,19 @@ def test_force_recomputes_everything_and_keeps_the_old_results(fake, tmp_path):
 
 
 def test_every_table_belongs_to_one_step():
+    """--force sets aside the tables of a step (STEP_OUTPUTS): every table the experiments write has one."""
+    import re
+    tables = set()
+    for f in glob.glob(os.path.join(EXP, "e[1-6]_*.py")):
+        tables |= {f"{d}/{name}" for d, name in
+                   re.findall(r"Rows\(f\"\{out_dir\(a\.out, '(e[1-6])'\)\}/([\w.]+)\"", open(f).read())}
     owners = {}
     for step, pats in M.STEP_OUTPUTS.items():
         assert step in M.STEPS
         for p_ in pats:
             if p_.endswith(".csv"):
                 owners.setdefault(p_, []).append(step)
-    assert sorted(owners) == sorted(M.TABLE_KEYS) and all(len(v) == 1 for v in owners.values())
+    assert len(tables) == 12 and sorted(owners) == sorted(tables) and all(len(v) == 1 for v in owners.values())
     assert set(M.STEP_OUTPUTS) == set(M.STEPS)
 
 
@@ -154,21 +160,6 @@ def test_force_on_a_completed_step_runs_it(fake):
     assert run("--steps", "s1") == 0
     assert run("--steps", "s1", "--force") == 0
     assert calls() == ["s1", "s1"]
-
-def test_records_of_old_main_py(fake):
-    """status.json written by main.py up to v1.2.0: exit 0 counts as done, -9 does not."""
-    run, calls, out = fake
-    out.mkdir()
-    old = {"s1": {"returncode": 0, "seconds": 1.0, "finished": "x", "quick": False},
-           "s2": {"returncode": -9, "seconds": 2.0, "finished": "y", "quick": False}}
-    (out / "status.json").write_text(json.dumps(old))
-    assert run("--steps", "s1", "s2") == 0
-    assert calls() == ["s2"]
-    merged = json.loads((out / "status.json").read_text())
-    assert merged["s1"] == old["s1"] and merged["s2"]["returncode"] == 0 and "record" in merged["s2"]
-    # a deleted record is not replaced by its copy in status.json
-    os.remove(out / "status" / "s2.json")
-    assert CK.load(str(out), "s2") is None
 
 
 def _fake_grc(path, imports=True):
@@ -250,50 +241,6 @@ def test_relative_paths_reach_the_steps_absolute(fake, tmp_path, monkeypatch):
     assert call["argv"][call["argv"].index("--out") + 1] == str(work / "res")
     assert call["argv"][call["argv"].index("--data-dir") + 1] == str(work / "dd")
 
-
-def test_tables_in_the_old_place_are_moved_and_merged(fake, tmp_path, monkeypatch):
-    """What main.py up to v1.2.0 left in experiments/results and experiments/experiments/data/real
-    is moved into place, and a table in both places is merged row by row; then the steps run."""
-    run, calls, out = fake
-    root = tmp_path / "repo"
-    here = root / "experiments"
-    monkeypatch.setattr(M, "HERE", str(here))
-    old, new = here / "results", root / "results"
-    for d in ("e1", "e5", "e5/values"):
-        (old / d).mkdir(parents=True, exist_ok=True)
-    (new / "e5").mkdir(parents=True)
-    (old / "e1" / "exactness.csv").write_text("graph,measure,x\nG,lazy,1\n")       # only in the old place
-    (old / "e5" / "values" / "g.npz").write_bytes(b"npz")
-    (new / "e5" / "whole.csv").write_text("graph,method,status,t\nG,orcut,,1\nG,grc-mix,ok,5\nH,orcut,,2\n")
-    os.utime(new / "e5" / "whole.csv", (1, 1))  # the older copy
-    (old / "e5" / "whole.csv").write_text("graph,method,status,t\nG,orcut,,9\nG,grc-mix,unavailable,\n"
-                                          "G,grc-otd,error: x,\n")
-    (here / "experiments" / "data" / "real").mkdir(parents=True)
-    (here / "experiments" / "data" / "real" / "com_x.npz").write_bytes(b"data")
-    steps = {"s1": ([str(tmp_path / "fake.py"), "s1"], "fake")}
-    assert M.main(["--out", str(new), "--steps", "s1"], steps=steps) == 0
-    assert not glob.glob(str(old / "e*" / "**" / "*"), recursive=True)
-    assert (new / "e1" / "exactness.csv").read_text() == "graph,measure,x\nG,lazy,1\n"
-    assert (new / "e5" / "values" / "g.npz").read_bytes() == b"npz"
-    got = {(r["graph"], r["method"]): r for r in common.read_csv(str(new / "e5" / "whole.csv"))}
-    assert got[("G", "orcut")]["t"] == "9"             # the newer copy's row
-    assert got[("G", "grc-mix")]["status"] == "ok"     # a row with a result beats the newer one without
-    assert got[("G", "grc-otd")]["status"] == "error: x" and got[("H", "orcut")]["t"] == "2"
-    assert (here / "data" / "real" / "com_x.npz").read_bytes() == b"data"
-    assert calls() == []  # the fake step writes its calls into --out: here new/calls.jsonl
-    assert len((new / "calls.jsonl").read_text().splitlines()) == 1
-    # nothing left to move: the next run does not touch anything
-    assert M._adopt_old_layout(str(new), None) == []
-
-
-def test_table_keys_match_the_experiments():
-    import re
-    found = {}
-    for f in glob.glob(os.path.join(EXP, "e[1-7]_*.py")):
-        for d, name, key in re.findall(r"Rows\(f\"\{out_dir\(a\.out, '(e[1-7])'\)\}/([\w.]+)\", (\[[^\]]*\])\)",
-                                       open(f).read()):
-            found[f"{d}/{name}"] = json.loads(key)
-    assert found == M.TABLE_KEYS
 
 def test_artifacts_run_again_when_the_tables_change(fake, tmp_path, monkeypatch):
     run, calls, out = fake
@@ -415,18 +362,6 @@ def test_grc_environment_next_to_this_one_is_found(tmp_path, monkeypatch):
     assert M._grc_python(None)[0] == "/elsewhere/python"
 
 
-def test_steps_completed_under_older_rules_run_again(fake):
-    """e7-radius (now e6-radius) recorded by main.py up to v1.2.0, which skipped large supports, runs
-    again, once."""
-    run, calls, out = fake
-    out.mkdir()
-    (out / "status.json").write_text(json.dumps({"e7-radius": {"returncode": 0, "seconds": 1.0, "finished": "x",
-                                                              "quick": False}}))
-    assert run("--steps", "e6-radius") == 0
-    assert run("--steps", "e6-radius") == 0
-    assert calls() == ["e6-radius"] and CK.load(str(out), "e6-radius")["config"]["rules"] == M.RULES["e6-radius"]
-
-
 def _squeue(tmp_path, monkeypatch, out="", rc=0, err=""):
     """A stand-in for Slurm's squeue on PATH, answering every job with ``out``."""
     b = tmp_path / "bin"
@@ -541,28 +476,12 @@ def test_options_after_double_dash_reach_the_step(fake):
     assert calls() == ["s1", "s1"]
 
 
-def test_sinkhorn_rows_of_the_old_budget_run_again(tmp_path, monkeypatch):
-    import argparse
-    import e5_approx as E5
-    monkeypatch.setattr(common, "_TABLES", [])
-    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
-    t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.03, sample=558, timed=369))        # cut by the old budget
-    t.add(dict(graph="Twitch-DE", method="sinkhorn", reg=0.1, sample=558, timed=558))         # complete
-    t.add(dict(graph="Squirrel", method="sinkhorn", reg=0.03, sample=500, timed=470, skipped_memory=30,
-               max_pairs=5e7, time_edge_weighted_s=1e-3, untimed_share=0.0))                   # new: done
-    t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
-    a = argparse.Namespace()
-    assert not E5.sinkhorn_done(t, a, graph="Twitch-DE", method="sinkhorn", reg=0.03)
-    assert E5.sinkhorn_done(t, a, graph="Twitch-DE", method="sinkhorn", reg=0.1)
-    assert E5.sinkhorn_done(t, a, graph="Squirrel", method="sinkhorn", reg=0.03)
-
-
 def test_sinkhorn_rows_that_skipped_edges_for_memory_run_again_with_more(tmp_path, monkeypatch):
     import argparse
     import e5_approx as E5
     monkeypatch.setattr(common, "_TABLES", [])
     t = common.Rows(str(tmp_path / "sinkhorn.csv"), ["graph", "method", "reg"])
-    t.add(dict(graph="GitHub", method="pot", reg=0.0, sample=651, timed=650, skipped_memory=1))   # old cap: 5e7
+    t.add(dict(graph="GitHub", method="pot", reg=0.0, sample=651, timed=650, skipped_memory=1, max_pairs=5e7))
     t.add(dict(graph="Squirrel", method="pot", reg=0.0, sample=500, timed=500, skipped_memory=0))
     t.add(dict(graph="Big", method="pot", reg=0.0, sample=10, timed=9, skipped_memory=1, max_pairs=7e8,
                time_edge_weighted_s=1e-3, untimed_share=0.0))
@@ -574,7 +493,7 @@ def test_sinkhorn_rows_that_skipped_edges_for_memory_run_again_with_more(tmp_pat
     assert not E5.sinkhorn_done(t, a, 2e9, graph="Big", method="pot", reg=0.0)      # a job with more
 
 
-def test_sinkhorn_estimate_covers_the_timed_bins_and_rows_redo_once(tmp_path, monkeypatch):
+def test_sinkhorn_estimate_covers_the_timed_bins(tmp_path, monkeypatch):
     import argparse
     import e5_approx as E5
     strata = [(0, np.arange(3), 600), (1, np.arange(2), 399), (2, np.arange(1), 1)]   # the top bin: one hub edge
@@ -583,14 +502,11 @@ def test_sinkhorn_estimate_covers_the_timed_bins_and_rows_redo_once(tmp_path, mo
     assert tot == pytest.approx((600 * 1.0 + 399 * 2.0) / 999 * 1000) and untimed == pytest.approx(0.001)
     monkeypatch.setattr(common, "_TABLES", [])
     t = common.Rows(str(tmp_path / "s.csv"), ["graph", "method", "reg"])
-    t.add(dict(graph="GitHub", method="sinkhorn", reg=0.01, sample=651, timed=650, skipped_memory=1,
-               time_edge_weighted_s=float("nan")))                                     # the old NaN row
     t.add(dict(graph="GitHub", method="sinkhorn", reg=0.03, sample=651, timed=650, skipped_memory=1,
-               max_pairs=5e7, time_edge_weighted_s=2e-3, untimed_share=1e-6))          # redone: finite
+               max_pairs=5e7, time_edge_weighted_s=2e-3, untimed_share=1e-6))
     t = common.Rows(str(tmp_path / "s.csv"), ["graph", "method", "reg"])
     a = argparse.Namespace(sinkhorn_max_pairs=5e7)
-    assert not E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="sinkhorn", reg=0.01)   # redone once
-    assert E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="sinkhorn", reg=0.03)       # then done
+    assert E5.sinkhorn_done(t, a, 7e8, graph="GitHub", method="sinkhorn", reg=0.03)  # Sinkhorn stays at 5e7
     assert E5.method_limit("pot", 7e8, a) == 7e8 and E5.method_limit("sinkhorn", 7e8, a) == 5e7
 
 
@@ -649,26 +565,3 @@ def test_rows_left_for_more_memory_are_found_in_every_kind_of_table(tmp_path):
     assert M._memory_gated("e5-whole", str(out)) == 0
 
 
-def test_results_of_1_3_move_into_place(fake):
-    """1.4.0 removed the downstream experiment (then E6) and renamed E7 to E6: its results move to
-    retired/, e7/ becomes e6/, and a completed e7-radius stays done as e6-radius."""
-    run, calls, out = fake
-    assert run("--steps", "e6-radius") == 0
-    rec = CK.load(str(out), "e6-radius")
-    # what 1.3 left: E7's record and table under its old name, the downstream table in e6/
-    (out / "status" / "e6-radius.json").unlink()
-    CK.save(str(out), "e7-radius", {k: v for k, v in dict(rec, step="e7-radius").items() if k != "record"})
-    CK.save(str(out), "e6-community", {k: v for k, v in dict(rec, step="e6-community").items() if k != "record"})
-    (out / "e7").mkdir()
-    (out / "e7" / "radius.csv").write_text("graph,config\nBA,ball r=2\n")
-    (out / "e6").mkdir()
-    (out / "e6" / "community.csv").write_text("graph,method\nKarate,exact\n")
-    assert run("--steps", "e6-radius") == 0
-    assert calls() == ["e6-radius"]  # done before: not run again
-    assert (out / "e6" / "radius.csv").read_text().startswith("graph,config") and not (out / "e7").exists()
-    assert (out / "retired" / "1.3" / "e6" / "community.csv").exists() and not (out / "e6" / "community.csv").exists()
-    assert not (out / "status" / "e7-radius.json").exists() and not (out / "status" / "e6-community.json").exists()
-    assert CK.load(str(out), "e6-radius")["step"] == "e6-radius"
-    st = json.loads((out / "status.json").read_text())
-    assert "e6-radius" in st and "e7-radius" not in st and "e6-community" not in st
-    assert run("--steps", "e6-radius") == 0 and calls() == ["e6-radius"]  # and nothing left to move

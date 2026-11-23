@@ -9,7 +9,7 @@ A spec is a string:
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -90,4 +90,3 @@ MEDIUM = ["real:" + s.name for s in D.REAL if s.group == "medium"]
 LARGE = ["real:" + s.name for s in D.REAL if s.group == "large"]
 XLARGE = ["real:" + s.name for s in D.REAL if s.group == "xlarge"]
 LAZY_ONLY = ["real:Orkut"]  # E3: only the lazy measure (the three measures would triple a run of days)
-HUBBY = ["real:GitHub", "real:Twitch-DE", "real:Squirrel", "real:Amazon-Computers", "real:Facebook"]

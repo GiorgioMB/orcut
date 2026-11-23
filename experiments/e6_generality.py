@@ -187,8 +187,8 @@ def radius_done(rows, name, cfg, a):
 
 
 def part_radius(a):
-    import numba
     import orcut
+    from orcut.api import threads
 
     rows = Rows(f"{out_dir(a.out, 'e6')}/radius.csv", ["graph", "config"])
     graphs = a.graphs or ["bundled:power_grid", "bundled:yeast", "bundled:jazz", "synth:ER:5000:8:0",
@@ -217,8 +217,7 @@ def part_radius(a):
                 log(f"E6R {name:16s} {cfg:9s} skipped ({row['max_support_pairs']:,} pairs > --max-pairs)")
                 continue
             # every thread holds the pairs of its edge: fewer threads for large supports, so that
-            # all of them together hold at most --pairs-in-memory pairs (the memory of 32 threads
-            # on supports of 5 x 10^6 pairs, as before)
+            # all of them together hold at most --pairs-in-memory pairs
             T = int(max(1, min(a.threads, a.pairs_in_memory // max(1, row["max_support_pairs"]))))
             row["threads"] = T
             if T < a.threads:
@@ -229,9 +228,9 @@ def part_radius(a):
             f_all(ids_all[:4])  # warm
             # whole graph when affordable, otherwise estimated from the strata
             if g.num_edges <= a.whole_max_edges:
-                t_whole, val_all = common.best_of(lambda: f_all(), reps=1)
+                t_whole, _ = common.best_of(lambda: f_all(), reps=1)
                 row["time_whole_s"] = t_whole
-            with common.numba_threads(1):
+            with threads(1):
                 times_o = [common.time_per_edge(lambda sub: f_all(sub), s, reps=1) for _, s, _ in strata]
                 vals_o = [f_all(s) for _, s, _ in strata]
             row["est_total_1thread_s"] = common.estimate_total(strata, times_o)

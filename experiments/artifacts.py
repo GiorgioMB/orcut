@@ -1,17 +1,13 @@
 """Numbers, tables and figures of the paper, from the result tables of E1--E6.
 
-Writes into ``--paper-dir`` (default ``results/paper``):
-
-* ``solver_numbers.tex``: one macro per number, read by ``\\res{Key}`` in the paper
-  (``\\csname res@Key\\endcsname``); keys are listed in ``KEYS.md`` with their source;
-* ``rows-<table>.tex``: table bodies, read by ``\\resrows{<table>}``;
-* ``fig-*.pdf``: figures.
-
-Every block is independent: a missing result table only leaves its keys undefined (the paper then
-shows a red placeholder), so the script can be run on partial results. ``--provisional`` marks
-every number with a dagger (results of a quick run, not of the full protocol).
+Writes into ``--paper-dir`` (default ``results/paper``): ``solver_numbers.tex``, with one macro per
+number (``\\res{Key}`` in the paper) and per table body (``\\resrows{table}``); ``KEYS.md``, which
+lists every key with its source; and the figures ``fig-*.pdf``. A missing result table only leaves
+its keys undefined (the paper then shows a red placeholder). ``--provisional`` marks every number
+with a dagger (results of a quick run).
 
 Usage: python artifacts.py [--results results] [--paper-dir results/paper] [--provisional]
+                    [--fig-width 6.75] [--method-name ours]
 """
 from __future__ import annotations
 
@@ -82,7 +78,7 @@ def _f_num(x, sig: int = 3) -> str:
 def nanstat(fn, x) -> float:
     """``fn`` (np.nanmedian, np.nanmax, ...) of ``x``: NaN when no value is there, without numpy's
     All-NaN warning. Partial results leave whole columns empty (proxies have no MAE, small graphs no
-    hub edges, rows not computed yet); the number is then shown as -- or left out, as before."""
+    hub edges, rows not computed yet); the number is then shown as -- or left out."""
     a = np.asarray(x, dtype=float).ravel()
     return float(fn(a)) if np.any(~np.isnan(a)) else float("nan")
 
@@ -378,7 +374,6 @@ def block_e2(R, O: Out, figdir: str):
     # real graphs, per bin
     try:
         b = load(R, "e2/real_bins.csv")
-        w = b["share"].to_numpy()
         rows = []
         for gname, sub in b.groupby("graph", sort=False):
             ours = float(np.sum(sub["share"] * sub["ours_s"]))
@@ -526,11 +521,11 @@ def block_e3(R, O: Out, figdir: str):
         import matplotlib.pyplot as plt
 
         s = load(R, "e3/synth.csv")
-        if "chunks_timed" in s:  # a row whose time does not sum all its chunks (tools/check_chunks.py)
+        if "chunks_timed" in s:  # a row whose time does not sum all its chunks
             short = s[s["chunks_timed"].astype(float) < s["chunks"].astype(float)]
             for _, r in short.iterrows():
                 O.missing.append(f"e3/synth.csv: {r['family']} {r['regime']} n={r['n']} sums "
-                                 f"{int(r['chunks_timed'])} of {int(r['chunks'])} chunks (tools/check_chunks.py)")
+                                 f"{int(r['chunks_timed'])} of {int(r['chunks'])} chunks")
         lines = []
         fig, axes = plt.subplots(1, 2, figsize=(FIG_W, 2.1))
         for ax, regime in zip(axes, ["fixed16", "grow0.4"]):
@@ -652,9 +647,10 @@ def block_e5(R, O: Out, figdir: str):
             sub_ok = sub
         if not len(sub):
             continue
-        n_to = int((sub.get("status", "") == "timeout").sum()) if "status" in sub else 0
+
         def med(col):
             return float(nanstat(np.nanmedian, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
+
         def mx(col):
             return float(nanstat(np.nanmax, sub_ok[col].astype(float))) if col in sub_ok and len(sub_ok) else float("nan")
         cells = [label,
@@ -676,8 +672,6 @@ def block_e5(R, O: Out, figdir: str):
                       f"e5/whole: max error on hub edges ({meth})")
             if "max_err" in sub:
                 O.put(f"EFiveGrc{key}MaxErr", f_num(nanstat(np.nanmax, sub["max_err"].astype(float)), 2), f"e5/whole: max error ({meth})")
-    to = d[d.get("status", "") == "timeout"] if "status" in d else d.iloc[0:0]
-    O.put("EFiveGrcTimeouts", f_int(len(to)), "e5/whole: GRC runs over the time limit")
     O.put("EFiveGraphs", f_int(d["graph"].nunique()), "e5/whole: graphs")
     if "jl_bounds_hold" in d:
         ok = d[d["method"] == "jl"]["jl_bounds_hold"].astype(str).str.lower().eq("true").all()
@@ -795,7 +789,7 @@ def main():
     ap.add_argument("--paper-dir", default=None)
     ap.add_argument("--provisional", action="store_true", help="mark every number as provisional (quick run)")
     ap.add_argument("--fig-width", type=float, default=FIG_W,
-                    help="text width of the paper in inches, which figures are drawn at (LoG 5.5, ICML 6.75)")
+                    help="text width in inches at which the figures are drawn (5.5; 6.75 for a two-column layout)")
     ap.add_argument("--method-name", default=METHOD,
                     help="the solver's name in figure legends and table labels (e.g. ours, for an anonymous version)")
     a = ap.parse_args()

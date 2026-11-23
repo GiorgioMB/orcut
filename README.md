@@ -1,95 +1,43 @@
-# Transport-free Ollivier-Ricci curvature
+# orcut
 
-Ollivier–Ricci curvature of every edge of an unweighted graph, with one
-minimum cut per edge, in exact integer arithmetic and without a distance matrix.
-
-Any two vertices of the closed neighbourhoods of an edge are at distance at most
-three, so the Kantorovich dual of the edgewise transport problem has an integral
-optimum with potentials in {0, 1, 2, 3}. Written in unary, it is a maximum-weight
-closure, solved by one s–t minimum cut. Its arcs come from adjacency and common
-neighbours only (pairs at distance three give none), and with one relay node per
-common neighbour the network is linear in the adjacency lists of the vertices that
-carry net mass. The same holds for any one-step measures (lazy, non-lazy, any idleness,
-weighted walks), and, with 2r layers, for measures supported on balls of radius r.
+Exact Ollivier–Ricci curvature of every edge of a graph, with one minimum cut per edge: exact
+integer arithmetic, no distance matrix, no linear program. The repository holds the solver
+(`orcut/`), its tests, and the experiments of the paper (`experiments/`); `v1.4.4` is the version of
+the paper.
 
 ```python
 import orcut
-g = orcut.Graph.from_edges([(0, 1), (1, 2), (2, 0), (2, 3)])  # or a networkx graph / PyG Data
-orcut.curvature(g)                      # lazy (idleness 1/(deg+1)), aligned with g.edges (u < v)
-orcut.curvature(g, "lly")               # Lin–Lu–Yau; also "nonlazy", a number p (idleness p),
-orcut.curvature(g, orcut.Walk(weights=w, idleness=0.5))   # or a weighted walk (integer weights)
-orcut.curvature(g, exact_fraction=True) # also W1 as an exact integer fraction per edge
-c = orcut.certify(g, (0, 1))            # an optimal plan and an optimal 1-Lipschitz potential
-c.verified, c.verify(g)                 # checked exactly when built, and re-checkable from scratch
-orcut.ball_curvature(g, 2)              # Ollivier's ball measures, radius 2 (layered closure)
-orcut.walk_curvature(g, 2)              # two-step lazy random walk
-orcut.affected_edges(g2, changed_pairs) # after inserting/deleting pairs: the only edges to recompute
+g = orcut.Graph.from_edges([(0, 1), (1, 2), (2, 0), (2, 3)])  # or a networkx graph
+orcut.curvature(g)                        # lazy walk, aligned with g.edges (u < v)
+orcut.curvature(g, "lly")                 # also "nonlazy", an idleness p, or orcut.Walk(weights, idleness)
+orcut.curvature(g, exact_fraction=True)   # and W1 as an exact fraction per edge
+orcut.certify(g, (0, 1))                  # an optimal plan and potential, verified exactly
+orcut.ball_curvature(g, 2)                # uniform measures on balls of radius 2
+orcut.walk_curvature(g, 2)                # two-step lazy walk
+orcut.affected_edges(g, pairs)            # after changing these pairs of g: the only edges to recompute
 ```
 
-## Installation
+## Install
 
-`orcut` is on PyPI as [`faster-or-curvature`](https://pypi.org/project/faster-or-curvature/), but that package is the solver alone; for the experiments and everything else beyond the solver, install from this repository. Without any package index (for example on a cluster without PyPI access), use the conda-forge environment:
 ```bash
-conda env create -f environment.yml && conda activate orcut   # numpy, scipy, numba, + test/experiment deps
+conda env create -f environment.yml && conda activate orcut
 pip install --no-index --no-deps --no-build-isolation -e .
 pytest -q
 ```
 
-## Versions
-* **1.4.4** (the version of the arXiv paper): the solver and every number are unchanged; the
-  paper also reports how much the type of node moves its times (a calibration across node types)
-  and which processor produced each row (`tools/provenance.py`, from the logs and the scheduler's
-  records). See CHANGELOG.md.
-* **1.4.3**: the solver and every number are unchanged; the
-  explicit-distance oracle (`orcut._reference`) is labelled "oracle" in Table 3 and Figure 3.
-* **1.4.2**: the solver and every number are unchanged;
-  `artifacts.py` draws the figures for other layouts (`--fig-width`, e.g. 6.75 in for ICML's two
-  columns) and can name the solver otherwise in legends and labels (`--method-name ours`, for an
-  anonymous version). See CHANGELOG.md.
-* **1.4.1**: the solver is unchanged (the same values); E3's
-  synthetic sweep stops at the sizes that were run, its rows get no POT estimate, and a row solved
-  in chunks by several workers sums all its chunks (`tools/check_chunks.py` checks and repairs
-  results written before). See CHANGELOG.md.
-* **1.4.0**: the solver is unchanged (the same values); the
-  experiments are E1 to E6 as in the paper: the downstream experiment of 1.3 is removed and E7 is
-  now E6 (`e6-measures`, `e6-radius`, `results/e6/`); results of 1.3 are moved into place on the
-  first run. See CHANGELOG.md.
-* **1.3.1**: the solver is unchanged (the same values); fixes to the experiments: GraphRicciCurvature's
-  memory is estimated from measurements, a GRC run killed at the memory limit is reported as such
-  and retried by a job with more memory, the paper's figures and tables are drawn at their printed
-  size, and the downstream experiment (then E6) runs only when asked. See CHANGELOG.md.
-* **1.3.0**: the solver is unchanged; the experiments resume
-  from wherever a job was stopped (checkpoints per step, per row and inside rows), run without time
-  budgets, and find their environments on SLURM. See CHANGELOG.md.
-* **1.2.1**: fixed the unpickler for downloaded Planetoid datasets to support loading Python 2 `__builtin__` containers.
-* **1.2.0**: witness relays (one zero-weight relay per common neighbour) for the pairs at distance 2
-  that the bitset network would list one by one, chosen per edge when the network gets smaller; a
-  bound on the bitset work (four words per adjacency entry) beyond which an edge is solved on the
-  linear-size witness network (`orcut._witness`, also usable on its own); graph min-cost flow
-  (Beckmann) and the lower-bound instances of DasGupta et al. (2023) in the experiments. Values
-  unchanged (tested).
-* **1.1.0**: `orcut.curvature` (any one-step measure, exact fractions, diagnostics, ablation
-  flags), certificates (`orcut.certify`), the layered closure for supports of radius r
-  (`ball_curvature`, `walk_curvature`), exact incremental updates (`affected_edges`), and the
-  experiments of the paper (`experiments/`). The kernel of 1.0.0 is kept unchanged in
-  `orcut/_kernels.py`, and `orcut.curvature` returns the same values bit for bit (tested).
-* **1.0.0** is the solver used for every exact curvature in Micaletto and Nigrelli,
-  [*From Proxy to Certificate: Two-Sided Ollivier--Ricci Bounds from Balanced Forman Curvature*](https://arxiv.org/abs/2603.13535): 
- `curvature-transfer` depends on `orcut==1.0.0` (tag `v1.0.0`) to have values and timings reproduce that paper. 
+The solver alone is on PyPI as [`faster-or-curvature`](https://pypi.org/project/faster-or-curvature/).
 
 ## Layout
 
 | Path | Contents |
 | --- | --- |
-| `orcut/graph.py` | CSR graph, canonical undirected edges, networkx / PyG / edge-list constructors |
-| `orcut/_kernels.py` | the 1.0.0 kernel (frozen): lazy, non-lazy, LLY, and the TLW certificate |
-| `orcut/_core.py` | the general one-step kernel: per-vertex masses, bitsets, relays, witness relays, ablation flags, diagnostics |
-| `orcut/_witness.py` | the linear-size witness network on its own (one relay per common neighbour; no bitsets, no distances) |
-| `orcut/_layered.py` | W1 on bounded integer metrics by a layered closure; ball and multi-step measures; certificates |
-| `orcut/measures.py` | measure specifications (`"lazy"`, `"nonlazy"`, `"lly"`, idleness p, `Walk`) |
-| `orcut/certify.py` | per-edge certificates (plan and potential) and their exact verification |
-| `orcut/_reference.py` | independent oracle: full local distance matrix, three-level closure, recursive Dinic |
-| `orcut/api.py` | `curvature`, `ball_curvature`, `walk_curvature`, `affected_edges`, `exact` (1.0.0 API), thread control |
-| `tests/` | kernels against each other (bit for bit), against the oracle, and against linear programming |
-| `experiments/` | the experiments of the paper, E1 to E6 (see `experiments/README.md`) |
-| `tools/` | `anonymize.py` (the anonymized copy for double-blind review); `check_formulas.py` and `check_phases.py` (the paper's matching identity, min-max formula and bound on Dinic's phases, checked numerically); `check_chunks.py` (E3's rows solved in chunks against their saved chunks); `provenance.py` (the node behind each row, from the logs and the scheduler's records) |
+| `orcut/_core.py` | the solver: bitsets, relays, witness relays, twin merging, warm-started Dinic |
+| `orcut/_witness.py` | the linear-size witness network |
+| `orcut/_layered.py` | the layered closure for costs up to D (balls, multi-step walks) |
+| `orcut/certify.py` | certificates (an optimal plan and potential), checked exactly |
+| `orcut/_kernels.py` | the solver of 1.0.0, kept unchanged (`orcut.exact`) |
+| `orcut/_reference.py` | the oracle: explicit distances, three-level closure, its own max flow |
+| `orcut/api.py`, `graph.py`, `measures.py` | entry points, CSR graphs, measures |
+| `tests/` | the kernels against each other, the oracle and linear programming; the theorems, numerically |
+| `experiments/` | E1–E6 of the paper ([experiments/README.md](experiments/README.md)) |
+| `tools/` | `check_formulas.py`, `check_phases.py` (the theorems on larger samples), `provenance.py` (the node behind each row) |

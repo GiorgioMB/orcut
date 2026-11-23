@@ -1,10 +1,6 @@
-# conda-forge environment for orcut and its experiments (no PyPI needed):
+# The versions of the experiments of the paper (GraphRicciCurvature: experiments/grc-environment.yml).
 #   conda env create -f environment.yml && conda activate orcut
 #   pip install --no-index --no-deps --no-build-isolation -e .
-# The pinned versions are those of the experiments of the paper. 
-# GraphRicciCurvature (one baseline of the experiments) needs
-# scipy <= 1.13: see experiments/grc-environment.yml for its own environment, which the SLURM
-# scripts find when it is created next to this one (same environments folder).
 name: orcut
 channels:
   - conda-forge
@@ -22,5 +18,5 @@ dependencies:
   # experiments
   - pandas
   - matplotlib
-  - pot=0.9.7        
-  - ortools-python=9.15  
+  - pot=0.9.7
+  - ortools-python=9.15

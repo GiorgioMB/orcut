@@ -40,7 +40,7 @@ STEPS = {
     "e4": ({"e4_ablation": 7}, r"^E4 (.+?)\s+(\S+)\s+est\."),
     "e5-whole": ({"e5_approx": 8}, r"^E5 (.+?)\s+((?:grc|orcut|jl|bf|af3)\S*)\s"),
     "e5-sinkhorn": ({"e5_approx": 9}, r"^E5S (.+?)\s+(\S+)\s+reg=(\S+)"),
-    # up to 1.3 these were E7, tasks 12 and 13 of the array (e7_generality.py); 10 and 11 since 1.4.0
+    # the logs of runs up to 1.3 name these steps E7 (e7_generality.py, array tasks 12 and 13)
     "e6-measures": ({"e7_generality": 12, "e6_generality": 10}, r"^E[67]M (.+?)\s+(lazy|nonlazy|lly|idle \d+/\d+|weighted walk)\s+[\d.]+s"),
     "e6-radius": ({"e7_generality": 13, "e6_generality": 11}, r"^E[67]R (.+?)\s+((?:walk|ball) r=\d+)"),
 }

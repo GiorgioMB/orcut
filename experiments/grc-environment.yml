@@ -1,21 +1,7 @@
-# Environment for the GraphRicciCurvature baseline (experiments/grc_runner.py). GRC 0.6.1 caps
-# scipy <= 1.13.1, it cannot share the orcut environment. Everything below is on conda-forge
-# except GRC itself, installed with pip:
-#
-#   conda env create -f experiments/grc-environment.yml      # next to the orcut environment
-#   conda activate orcut-grc
-#   # on any machine with PyPI access, fetch the wheel once and copy it to the cluster:
-#   pip download GraphRicciCurvature==0.6.1 --no-deps -d wheels/
-#   # on the cluster (no index needed):
-#   pip install --no-index --no-deps wheels/graphriccicurvature-0.6.1-py3-none-any.whl
-#   python -c "import GraphRicciCurvature.OllivierRicci"   # must succeed: conda alone does not install GRC
-#
-# (Alternatively, clone https://github.com/saibalmars/GraphRicciCurvature at the 0.6.1 release and
-#  pip install --no-index --no-deps --no-build-isolation it.) The runner imports neither orcut nor
-# numba, so nothing else is needed here. Created in the same folder as the orcut environment
-# (e.g. .../conda_envs/orcut-grc), it is found by main.py and the SLURM scripts; otherwise set
-# ORCUT_GRC_PYTHON to its python. The pinned versions are those that ran the experiments of the
-# paper: GRC 0.6.1, NetworKit 11.2, POT 0.9.7, NumPy 2.0.2, SciPy 1.13.1, NetworkX 3.3.
+# GraphRicciCurvature 0.6.1 (the E5 baseline) caps scipy <= 1.13.1, so it has its own environment,
+# found by main.py when created next to the orcut one (or set ORCUT_GRC_PYTHON to its python):
+#   conda env create -f experiments/grc-environment.yml && conda activate orcut-grc
+#   pip install --no-deps GraphRicciCurvature==0.6.1
 name: orcut-grc
 channels:
   - conda-forge

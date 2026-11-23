@@ -5,7 +5,6 @@ import pytest
 
 from conftest import small_graphs
 import orcut
-from orcut import _kernels as K
 from orcut import _reference as R
 
 

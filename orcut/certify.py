@@ -20,7 +20,7 @@ from numba import njit
 from . import _layered as LY
 from .api import as_graph
 from .graph import Graph
-from .measures import Walk, _frac, parse, walk_tables
+from .measures import parse
 
 __all__ = ["Certificate", "certify", "measures_of_edge"]
 

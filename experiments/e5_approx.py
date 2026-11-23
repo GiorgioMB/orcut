@@ -1,39 +1,24 @@
 """E5. What approximate pipelines get wrong, and what they cost.
 
-Part ``whole``: on every graph, the exact curvature at idleness 1/2 (GraphRicciCurvature's default
-alpha = 0.5) and the non-lazy curvature (alpha = 0, which the Jost--Liu mean estimates) are computed
-with orcut; against them we score
+Part ``whole``: on every graph, the exact curvature at idleness 1/2 (GraphRicciCurvature's
+alpha = 0.5) and the non-lazy curvature, which the Jost--Liu mean estimates, against
 
-  grc-mix       GraphRicciCurvature 0.6.1 with its defaults (OTDSinkhornMix, nbr_topk = 3000,
-                ot.emd2 with numItermax = 100000), alpha = 0.5;
-  grc-otd       method OTD (ot.emd2 everywhere), nbr_topk = 3000;
-  grc-otd-full  method OTD with no neighbour truncation (only when some degree exceeds 3000);
-  grc-sinkhorn  method Sinkhorn (regularization 0.1);
-  grc-atd       method ATD (average transport distance, an upper bound of W1);
-  bf, af3, jl   one-pass proxies (Balanced Forman, triangle-augmented Forman, mean of the
-                Jost--Liu bounds), scored by rank (Spearman, sign, recall of the 1% most negative /
-                positive edges) against the non-lazy and the Lin--Lu--Yau curvature, and jl also by
-                its error against the non-lazy curvature, which it estimates. On every edge we
-                check that the Jost--Liu bounds bracket the non-lazy curvature and that BF is below
-                the Lin--Lu--Yau curvature (Topping et al., 2022).
+  grc-mix       GraphRicciCurvature 0.6.1 with its defaults (OTDSinkhornMix, nbr_topk = 3000);
+  grc-otd       method OTD (ot.emd2 everywhere); grc-otd-full without neighbour truncation (only
+                when some degree exceeds 3000); grc-sinkhorn (regularization 0.1); grc-atd;
+  bf, af3, jl   Balanced Forman, triangle-augmented Forman, the mean of the Jost--Liu bounds,
+                scored by rank against the non-lazy and the Lin--Lu--Yau curvature (jl also by its
+                error); on every edge, the Jost--Liu bounds bracket the non-lazy curvature and BF
+                is below the Lin--Lu--Yau curvature.
 
-Errors are reported on all edges and on hub edges (an endpoint of degree >= ``--hub``); every
-method gets the same number of threads (``--threads``) and is timed end to end (GRC includes its
-shortest paths and its process pool). GRC runs in its own environment (``--grc-python`` or
-$ORCUT_GRC_PYTHON). A GRC run has no time limit. On graphs above ``--grc-chunk-above`` edges, and
-wherever one call did not finish before, it runs in contiguous chunks of edges of about
-``--grc-chunk`` seconds, each saved as soon as it is done (its time is then the sum over the chunks,
-in ``chunks`` of them); a single call killed by its job's memory limit (the job's whole process, or
-only GRC's: "out of memory with ...") is tried again only by a job with more memory. GRC's ATD
-always builds the all-pairs table, about 48 n^2 bytes at its peak (``baselines.grc_atd_need``),
-and is skipped where that does not fit; ``--grc-atd-apsp array`` builds the same table in 16 n^2.
-Several jobs can run this part at once (``main.py --worker K``): each GRC run is claimed by one of
-them, the others move on to the next.
+Every method gets the same threads and is timed end to end. GRC runs in its own environment
+(``--grc-python`` or $ORCUT_GRC_PYTHON) with no time limit, in saved chunks on large graphs; its ATD
+always builds the all-pairs table (``baselines.grc_atd_need``) and is skipped where that does not
+fit in the job's memory.
 
-Part ``sinkhorn``: time-accuracy trade-off on a stratified sample of edges (bins of d_i + d_j), on
-the local problems at idleness 1/2: entropic OT at regularization ``--regs`` against the exact value,
-per-edge solve time (given the distance matrix) against the per-edge time of orcut and of POT's
-network simplex.
+Part ``sinkhorn``: on a stratified sample of edges, entropic OT at the regularizations ``--regs``,
+given the distance matrix, against the exact value: per-edge time and error, against orcut and
+POT's network simplex.
 
 Usage: python e5_approx.py --part whole|sinkhorn [--graphs SPEC ...] [--threads 32] [--grc-python PY]
 """
@@ -86,27 +71,10 @@ def part_whole(a):
         grc_left = []
         for meth, grc_method, _ in GRC_METHODS:
             r = rows.get(graph=name, method=meth)
-            # an ATD row skipped because its all-pairs distances did not fit runs when this job has the memory;
-            # so does one killed at the memory limit while building them another way (--grc-atd-apsp)
-            st0 = str((r or {}).get("status") or "")
-            fits_now = r is not None and grc_ok and grc_method == "ATD" and \
-                (st0.startswith("skipped: needs") or
-                 (st0.startswith("out of memory") and str(r.get("apsp") or "grc") != a.grc_atd_apsp)) and \
-                B.grc_atd_need(int(common.num(r, "n")), a.grc_atd_apsp) <= (PT.memory_available() or 0)
-            if r is not None and grc_ok and grc_method == "ATD" and st0.startswith("skipped: needs") and not fits_now:
-                need = B.grc_atd_need(int(common.num(r, "n")), a.grc_atd_apsp)
-                if not abs(common.num(r, "need_bytes") - need) <= 1e-6 * need:  # skipped under another estimate
-                    rows.add(dict(r, status=B.grc_atd_skipped(need), need_bytes=need, apsp=a.grc_atd_apsp))
-                    log(f"E5 {name:16s} {meth:12s} {B.grc_atd_skipped(need)} (was: {st0[:40]})")
-                    r = rows.get(graph=name, method=meth)
-            # a timeout of the old 2-hour limit, or a method it skipped, runs now (there is no limit any more);
-            # so does a run given up by a job whose time or memory this one exceeds
-            again = r is not None and grc_ok and (str(r.get("status") or "") in ("timeout", "skipped") or PT.retry_now(r))
-            # a partial run (its budget ran out) continues from its chunks when the budget is raised
-            again = again or (r is not None and grc_ok and str(r.get("status") or "") == "partial" and
-                              (a.grc_budget is None or a.grc_budget > 1.01 * common.num(r, "grc_budget_s")))
-            if fits_now or again or \
-                    (not rows.done(graph=name, method=meth) and (grc_ok or r is None or common.row_failed(r))):
+            # a run given up by a job whose time or memory this one exceeds (an ATD row skipped because its
+            # all-pairs distances did not fit, a run killed at the memory or time limit) runs again
+            again = r is not None and grc_ok and PT.retry_now(r)
+            if again or (not rows.done(graph=name, method=meth) and (grc_ok or r is None or common.row_failed(r))):
                 grc_left.append(meth)
                 if r is not None:
                     log(f"E5 {name:16s} {meth:12s} computed again (was: {str(r.get('status'))[:60]})")
@@ -174,36 +142,27 @@ def part_whole(a):
             if grc_ok:
                 st, gave = grc_runs.resume((name, meth), "grc")
                 prev = str((rows.get(graph=name, method=meth) or {}).get("status") or "")
-                # in saved chunks: a run that did not finish in one call before (a timeout, a method it
-                # skipped, killed by its job's time limit), one under way in chunks, or a large graph
+                # in saved chunks: a run killed by its job's time limit before, one under way in chunks, or a
+                # large graph
                 chunked = os.path.isdir(state_dir) or g.num_edges > a.grc_chunk_above or \
-                    prev in ("timeout", "skipped", "partial") or prev.startswith("did not finish") or \
-                    (st == "gave_up" and gave["status"].startswith("did not finish"))
+                    prev.startswith("did not finish") or (st == "gave_up" and gave["status"].startswith("did not finish"))
                 if chunked:
-                    val, t, status, nch, ndone = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python,
-                                                               state_dir, chunk_s=a.grc_chunk, budget_s=a.grc_budget,
-                                                               log=lambda msg: log(f"E5 {name:16s} {msg}"),
-                                                               apsp=a.grc_atd_apsp)
-                    extra = dict(chunks=nch, grc_budget_s=a.grc_budget)
-                    if status == "partial":  # the budget ran out: scored on the edges done, time a lower bound
-                        extra.update(grc_edges_done=ndone, time_lower_s=t, time_est_s=t * g.num_edges / max(1, ndone))
-                        t = float("nan")
+                    val, t, status, nch = B.grc_chunked(g, grc_method, 0.5, topk, a.threads, a.grc_python, state_dir,
+                                                        chunk_s=a.grc_chunk, log=lambda msg: log(f"E5 {name:16s} {msg}"))
+                    extra = dict(chunks=nch)
                 elif st == "gave_up":  # killed by its job's memory limit: only a bigger job runs it again
                     val, t, status = None, float("nan"), gave["status"]
                     extra = {k: v for k, v in gave.items() if k != "status"}
                 else:
                     grc_runs.begin((name, meth), "grc")
-                    val, t, status = B.grc(g, grc_method, 0.5, topk, a.threads, a.grc_python, apsp=a.grc_atd_apsp)
-                for k, v in B.grc_row_fields(status, g.num_nodes, a.grc_atd_apsp).items():
+                    val, t, status = B.grc(g, grc_method, 0.5, topk, a.threads, a.grc_python)
+                for k, v in B.grc_row_fields(status, g.num_nodes).items():
                     extra.setdefault(k, v)  # what a job with more memory compares with (kept if given up before)
-                if grc_method == "ATD" and not (st == "gave_up" and not chunked):
-                    extra["apsp"] = a.grc_atd_apsp  # how its all-pairs table was built (empty: GRC's own, "grc")
             else:
                 val, t, status = None, float("nan"), "unavailable"
             row = dict(base, method=meth, target="idle 1/2", status=status, time_s=t, **extra)
             if val is not None:
-                ok = np.isfinite(val) if status == "partial" else np.ones(len(val), bool)
-                row.update(agreement(k_half[ok], val[ok], hub[ok]))
+                row.update(agreement(k_half, val, hub))
                 np.save(os.path.join(cache, f"{R.slug(name)}.{meth}.npy"), val)
             rows.add(row)
             grc_runs.drop((name, meth))
@@ -220,7 +179,7 @@ def part_whole(a):
         log(f"E5 {kept} GRC rows left as unavailable: GraphRicciCurvature is not available in this run")
     rows.refresh()
     for name, meth in busy:  # left to other workers: the step is done only once they are
-        if str((rows.get(graph=name, method=meth) or {}).get("status") or "") not in ("ok", "partial"):
+        if str((rows.get(graph=name, method=meth) or {}).get("status") or "") != "ok":
             common.mark_incomplete(f"{name} {meth}")
 
 
@@ -229,7 +188,7 @@ SINK_BYTES = 80.0  # bytes per entry of a dense local problem for POT or Sinkhor
 
 def sinkhorn_cap():
     """The largest dense local problem (entries) this job can give POT or Sinkhorn: what fits in its
-    memory (one edge at a time, single-threaded); at least 5 x 10^7, the fixed limit of before."""
+    memory (one edge at a time, single-threaded); at least 5 x 10^7."""
     import partial as PT
 
     return max(5e7, (PT.memory_available() or 0.0) / SINK_BYTES)
@@ -239,29 +198,19 @@ def method_limit(meth, cap, a):
     """Largest dense local problem (entries) given to ``meth``: what fits in memory for POT; for
     Sinkhorn also at most ``--sinkhorn-max-pairs`` (5 x 10^7): below reg 0.1 it runs in the log domain,
     with up to 10^5 passes over the whole problem, which on larger ones takes weeks per edge."""
-    return cap if meth != "sinkhorn" else min(cap, getattr(a, "sinkhorn_max_pairs", 5e7) or 5e7)
+    return cap if meth != "sinkhorn" else min(cap, a.sinkhorn_max_pairs)
 
 
 def sinkhorn_done(rows, a, cap=None, **key):
-    """The row is in the table, is not one of the earlier versions' budget (fewer edges timed than
-    sampled, and no count of the edges skipped), its time could be estimated, and it did not skip
-    edges that this job's limit admits (``cap``, through method_limit; rows that do not record their
-    limit had 5 x 10^7)."""
+    """The row is in the table and did not skip edges that this job's limit admits (``cap``, through
+    method_limit)."""
     if not rows.done(**key):
         return False
     r = rows.get(**key)
-    skipped = common.num(r, "skipped_memory")
-    if skipped != skipped:
-        return common.num(r, "timed") >= common.num(r, "sample")
-    if skipped > 0:
-        t = common.num(r, "time_edge_weighted_s")
-        if t != t and str(r.get("untimed_share") or "") == "":
-            return False  # an earlier row whose skipped edges left a bin without a time: estimated over the others now
-        had = common.num(r, "max_pairs")
-        had = 5e7 if had != had else had
-        lim = method_limit(key.get("method"), cap if cap is not None else sinkhorn_cap(), a)
-        return not lim > 1.01 * had
-    return True
+    if not common.num(r, "skipped_memory", 0.0) > 0:
+        return True
+    lim = method_limit(key.get("method"), cap if cap is not None else sinkhorn_cap(), a)
+    return not lim > 1.01 * common.num(r, "max_pairs")
 
 
 def _estimate_covered(strata, times, m):
@@ -311,10 +260,8 @@ def part_sinkhorn(a):
             too_big = [p > max_pairs for p in pairs]
             r0 = rows.get(graph=name, method=meth, reg=reg)
             if r0 is not None:
-                why = (f"{r0.get('skipped_memory')} edges were too large for the memory of the job that ran it"
-                       if common.num(r0, "skipped_memory") > 0 else "without the old time budget")
-                log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} computed again: {why} "
-                    f"(it timed {r0.get('timed')}/{r0.get('sample')} edges)")
+                log(f"E5S {name:16s} {meth:8s} reg={reg:<6g} computed again: {r0.get('skipped_memory')} edges were "
+                    f"too large for the memory of the job that ran it (it timed {r0.get('timed')}/{r0.get('sample')})")
             ck = os.path.join(out_dir(a.out, "e5", "partial"), f"sinkhorn.{R.slug(name)}.{meth}.{reg:g}.json")
             ck_done = ck[:-len(".json")] + ".done.json"  # the times of a finished row
             sample_ids = [int(x) for _, s, _ in strata for x in s]
@@ -398,19 +345,11 @@ def main():
     ap.add_argument("--hub", type=int, default=1000, help="hub edges: an endpoint of at least this degree")
     ap.add_argument("--grc-python", default=None, help="python of the GRC environment (default $ORCUT_GRC_PYTHON)")
     ap.add_argument("--grc-chunk", type=float, default=3600.0, help="part whole: seconds per saved chunk of a long GRC run")
-    ap.add_argument("--grc-budget", type=float, default=None,
-                    help="part whole: seconds of GRC time per graph and method for chunked runs (default: none); when "
-                         "it runs out, the row is 'partial': scored on the edges done, time_lower_s a lower bound")
     ap.add_argument("--grc-chunk-above", type=int, default=10**6,
                     help="part whole: GRC runs in saved chunks on graphs with more edges (and wherever one call did "
                          "not finish before)")
-    ap.add_argument("--grc-atd-apsp", choices=["grc", "array"], default="grc",
-                    help="part whole: how GRC's ATD gets its all-pairs distances: grc (default) as GRC 0.6.1 builds "
-                         "them, from n^2 Python floats (about 48 n^2 bytes at peak); array: NetworKit's table taken as "
-                         "an array (about 16 n^2), the same distances without GRC's conversion (recorded in apsp)")
     ap.add_argument("--regs", nargs="+", type=float, default=[1.0, 0.3, 0.1, 0.03, 0.01])
     ap.add_argument("--per-bin", type=int, default=50)
-    ap.add_argument("--budget", type=float, default=None, help="ignored: part sinkhorn has no time budget any more")
     ap.add_argument("--max-pairs", type=float, default=None,
                     help="part sinkhorn: largest dense local problem (entries) for POT and Sinkhorn "
                          "(default: what fits in the job's memory)")

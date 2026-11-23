@@ -3,16 +3,13 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import os
 import platform
-import resource
 import socket
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -169,25 +166,6 @@ def best_of(f, reps: int = 3):
     return best, out
 
 
-@contextmanager
-def numba_threads(k: Optional[int]):
-    import numba
-
-    prev = numba.get_num_threads()
-    if k is not None:
-        numba.set_num_threads(max(1, min(int(k), numba.config.NUMBA_NUM_THREADS)))
-    try:
-        yield numba.get_num_threads()
-    finally:
-        numba.set_num_threads(prev)
-
-
-def peak_rss_mb() -> float:
-    """Peak resident set size of this process so far (MB)."""
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return r / 1024.0 if sys.platform != "darwin" else r / 2**20
-
-
 def warm_jit() -> None:
     """Compile every kernel once (timings exclude JIT compilation)."""
     import orcut
@@ -249,24 +227,23 @@ def estimate_total(strata, times) -> float:
 
 # ------------------------------------------------------------------ metrics
 
-def topk_recall(exact: np.ndarray, approx: np.ndarray, k: int, most_negative: bool = True) -> float:
-    """Share of the k edges that ``approx`` ranks most negative (or most positive) that are among
-    the k most negative (positive) edges of ``exact``, ties at the threshold of ``exact`` counted
-    as correct (so ties cannot make an exact method look wrong)."""
+def topk_recall(exact: np.ndarray, approx: np.ndarray, k: int) -> float:
+    """Share of the k edges that ``approx`` ranks most negative that are among the k most negative
+    edges of ``exact``, ties at the threshold of ``exact`` counted as correct (so ties cannot make an
+    exact method look wrong)."""
     k = int(max(1, min(k, len(exact))))
-    s = 1.0 if most_negative else -1.0
-    sel = np.argsort(s * approx, kind="stable")[:k]
-    thr = np.partition(s * exact, k - 1)[k - 1]
-    return float(np.mean(s * exact[sel] <= thr + 1e-12))
+    sel = np.argsort(approx, kind="stable")[:k]
+    thr = np.partition(exact, k - 1)[k - 1]
+    return float(np.mean(exact[sel] <= thr + 1e-12))
 
 
 def agreement(exact: np.ndarray, approx: np.ndarray, hub: Optional[np.ndarray] = None,
               k_frac: float = 0.01, errors: bool = True) -> Dict[str, float]:
-    """Agreement of an approximation with the exact curvature on the same edges: errors (MAE, RMSE,
-    max, share above 0.01 and 0.1, MAE on ``hub`` edges), sign disagreement (edges of nonzero exact
-    curvature), Spearman correlation, and tie-aware recall of the 1% most negative and most
-    positive edges (the edges that curvature-based rewiring acts on). With ``errors=False`` only
-    the rank statistics (for proxies on another scale)."""
+    """Agreement of an approximation with the exact curvature on the same edges: errors (MAE, max,
+    and both on ``hub`` edges), sign disagreement (edges of nonzero exact curvature), Spearman
+    correlation, and tie-aware recall of the 1% most negatively curved edges (those that
+    curvature-based rewiring acts on). With ``errors=False`` only the rank statistics (for proxies
+    on another scale)."""
     from scipy.stats import spearmanr
 
     ok = np.isfinite(approx) & np.isfinite(exact)
@@ -277,8 +254,7 @@ def agreement(exact: np.ndarray, approx: np.ndarray, hub: Optional[np.ndarray] =
     k = max(1, int(round(k_frac * len(x))))
     if errors:
         err = np.abs(y - x)
-        out.update(mae=float(err.mean()), rmse=float(np.sqrt(np.mean(err ** 2))), max_err=float(err.max()),
-                   share_err_001=float(np.mean(err > 0.01)), share_err_01=float(np.mean(err > 0.1)))
+        out.update(mae=float(err.mean()), max_err=float(err.max()))
         if hub is not None:
             h = hub[ok]
             out["hub_edges"] = int(h.sum())
@@ -287,8 +263,7 @@ def agreement(exact: np.ndarray, approx: np.ndarray, hub: Optional[np.ndarray] =
     nz = np.abs(x) > 1e-12
     out["sign_disagree"] = float(np.mean(np.sign(y[nz]) != np.sign(x[nz]))) if nz.any() else float("nan")
     out["spearman"] = float(spearmanr(x, y).statistic) if np.ptp(x) > 0 and np.ptp(y) > 0 else float("nan")
-    out["recall_neg"] = topk_recall(x, y, k, True)
-    out["recall_pos"] = topk_recall(x, y, k, False)
+    out["recall_neg"] = topk_recall(x, y, k)
     return out
 
 
@@ -310,7 +285,7 @@ def environment() -> Dict:
         env["orcut"] = orcut.__version__
     except Exception:
         pass
-    for mod in ("ot", "ortools", "networkx", "torch", "torch_geometric"):
+    for mod in ("ot", "ortools", "networkx"):
         try:
             m = __import__(mod)
             env[mod] = getattr(m, "__version__", "?")

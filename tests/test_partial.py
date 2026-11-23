@@ -107,26 +107,27 @@ def test_e2_method_interrupted_in_the_middle_of_a_row_resumes(tmp_path, monkeypa
     assert got["highs_status"].startswith("skipped: needs") and not PT.retry_now(got, "highs")
 
 
-def test_e2_rows_of_earlier_budgets_fill_in_what_they_skipped(tmp_path, monkeypatch):
+def test_e2_rows_skipped_for_memory_run_in_a_job_with_more(tmp_path, monkeypatch):
     import e2_per_edge as E2
     monkeypatch.setattr(common, "_TABLES", [])
     t = common.Rows(str(tmp_path / "d.csv"), ["kind", "n", "seed"])
-    t.add(dict(kind="blocks", n=16384, seed=0, ours_s=0.1, pot_s=float("nan")))             # an old row: no reason
     t.add(dict(kind="blocks", n=4096, seed=0, ours_s=0.1, pot_s=3.9))                       # complete
     t.add(dict(kind="blocks", n=2**20, seed=0, ours_s=0.1, pot_s=float("nan"), pot_need_bytes=1e18,
                pot_status="skipped: needs ~1e9 GB, the job has 64 GB"))                    # cannot fit
     t = common.Rows(str(tmp_path / "d.csv"), ["kind", "n", "seed"])
-    assert E2._row_left(t, ["ours", "pot"], kind="blocks", n=16384, seed=0)[0] == ["pot"]
+    assert E2._row_left(t, ["ours", "pot"], kind="blocks", n=16384, seed=0) == (["ours", "pot"], None)
     assert E2._row_left(t, ["ours", "pot"], kind="blocks", n=4096, seed=0)[0] is None
     assert E2._row_left(t, ["ours", "pot"], kind="blocks", n=2**20, seed=0)[0] is None
+    monkeypatch.setattr(PT, "memory_available", lambda: 2e18)
+    assert E2._row_left(t, ["ours", "pot"], kind="blocks", n=2**20, seed=0)[0] == ["pot"]
 
 
 def test_synth_rows_are_found_by_their_requested_size(tmp_path, monkeypatch):
     import e3_scale as E3
     monkeypatch.setattr(common, "_TABLES", [])
     t = common.Rows(str(tmp_path / "synth.csv"), ["family", "regime", "n", "seed"])
-    t.add(dict(family="CL2.1", regime="fixed16", n=288752, seed=0, m=1966735, time_s=2020.75))   # older row
-    t.add(dict(family="CL2.1", regime="fixed16", n=958274, seed=0, m=6653529, time_s=30737.7))   # requested 10^6
+    t.add(dict(family="CL2.1", regime="fixed16", n=288752, n_target=3 * 10**5, seed=0, m=1966735, time_s=2020.75))
+    t.add(dict(family="CL2.1", regime="fixed16", n=958274, n_target=10**6, seed=0, m=6653529, time_s=30737.7))
     t.add(dict(family="ER", regime="fixed16", n=9999998, n_target=10**7, seed=0, m=79999925, time_s=56.2))
     t = common.Rows(str(tmp_path / "synth.csv"), ["family", "regime", "n", "seed"])
     assert E3.synth_done(t, "CL2.1", "fixed16", 3 * 10**5, 0) and E3.synth_done(t, "CL2.1", "fixed16", 10**6, 0)
@@ -179,18 +180,6 @@ def test_grc_atd_gets_all_pairs_when_they_fit(tmp_path, monkeypatch):
     assert st.startswith("skipped: needs") and "ATD" in st
 
 
-def test_highs_skipped_for_its_lp_size_runs_when_the_limit_is_raised(tmp_path, monkeypatch):
-    import e2_per_edge as E2
-    monkeypatch.setattr(common, "_TABLES", [])
-    t = common.Rows(str(tmp_path / "c.csv"), ["sweep", "regime", "s", "seed"])
-    t.add(dict(sweep="sym", regime="tree", s=8192, seed=0, ours_s=0.1, highs_s=float("nan"), highs_lp_vars=8194 ** 2,
-               highs_status=f"skipped: LP of {8194 ** 2:,} variables, above --highs-max-vars (16,793,604)"))
-    t = common.Rows(str(tmp_path / "c.csv"), ["sweep", "regime", "s", "seed"])
-    k = dict(sweep="sym", regime="tree", s=8192, seed=0)
-    assert E2._row_left(t, ["ours", "highs"], {"highs": 4098.0 ** 2}, **k)[0] is None    # the same limit: done
-    assert E2._row_left(t, ["ours", "highs"], {"highs": 8194.0 ** 2}, **k)[0] == ["highs"]  # raised: HiGHS only
-
-
 def test_grc_in_saved_chunks_resumes_after_a_kill(tmp_path, monkeypatch):
     import baselines as B
     import datasets as D
@@ -208,23 +197,10 @@ def test_grc_in_saved_chunks_resumes_after_a_kill(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
     n = len(calls)
-    vals, t, st, nch, ndone = B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
-    assert st == "ok" and ndone == g.num_edges and np.array_equal(vals, np.arange(g.num_edges, dtype=float))
+    vals, t, st, nch = B.grc_chunked(g, "OTD", 0.5, 3000, 1, "py", d, chunk_s=1e-6 * g.num_edges)
+    assert st == "ok" and np.array_equal(vals, np.arange(g.num_edges, dtype=float))
     assert calls[n][0] == calls[n - 1][0]  # it restarts the killed chunk, not the two saved before it
     assert t == 2.0 * nch and nch == len(calls) - 1
-
-
-def test_grc_reference_stops_at_its_budget_and_continues_with_a_larger_one(tmp_path, monkeypatch):
-    import baselines as B
-    import datasets as D
-    g = D.to_graph(*D.synthetic("ER", 3000, 10, 0))
-    monkeypatch.setattr(B, "grc", lambda g_, *a, ids=None, **kw: (ids.astype(float), 1.0, "ok"))  # 1 s per call
-    d = str(tmp_path / "state")
-    vals, t, st, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, 1, "py", d, chunk_s=1.0, budget_s=3.0)
-    assert st == "partial" and t == 3.0 and nch == 3 and 0 < ndone < g.num_edges
-    assert np.isnan(vals[ndone:]).all() and np.array_equal(vals[:ndone], np.arange(ndone, dtype=float))
-    vals, t, st, nch, ndone = B.grc_chunked(g, "OTDSinkhornMix", 0.0, 3000, 1, "py", d, chunk_s=1e6, budget_s=1e6)
-    assert st == "ok" and ndone == g.num_edges and nch == 4  # the three saved chunks, and one for the rest
 
 
 def test_workers_share_the_chunks_of_one_row(tmp_path):
@@ -311,12 +287,12 @@ def test_grc_killed_by_a_signal_says_so_instead_of_an_empty_error(tmp_path, monk
 
 def test_grc_atd_on_epinions_needs_more_than_a_300g_job(tmp_path, monkeypatch):
     """GRC's ATD on a graph of Epinions' size (75,877 vertices) needs ~258 GB as GRC builds its
-    all-pairs table (48 n^2 bytes), which a 300 GB job does not plan for; 16 n^2 with --apsp-array."""
+    all-pairs table (48 n^2 bytes), which a 300 GB job does not plan for."""
     import baselines as B
     import datasets as D
     n = 75877
     g = D.to_graph(n, np.stack([np.arange(n - 1), np.arange(1, n)], 1).astype(np.int64))  # a path
-    assert round(B.grc_atd_need(n) / 2**30) == 258 and round(B.grc_atd_need(n, "array") / 2**30) == 87
+    assert round(B.grc_atd_need(n) / 2**30) == 258
     py = _script(tmp_path / "python", f'echo "$@" > {tmp_path / "argv"}; exit 1')
     monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
     _, _, st = B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60)
@@ -326,41 +302,5 @@ def test_grc_atd_on_epinions_needs_more_than_a_300g_job(tmp_path, monkeypatch):
     monkeypatch.setenv("SLURM_MEM_PER_NODE", str(320 * 1024))
     assert B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60)[2] == "error: exit 1"
     assert "--shortest-path all_pairs" in (tmp_path / "argv").read_text()
-    assert "--apsp-array" not in (tmp_path / "argv").read_text()
-    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(128 * 1024))  # the lean table fits in the 128 GB jobs
-    B.grc(g, "ATD", 0.5, 3000, 1, py, timeout=60, apsp="array")
-    assert "--apsp-array" in (tmp_path / "argv").read_text()
-    B.grc(g, "OTD", 0.5, 3000, 1, py, timeout=60, apsp="array")
-    assert "--apsp-array" not in (tmp_path / "argv").read_text()  # only ATD's table is built that way
 
 
-def test_e5_rewrites_an_atd_skip_made_under_the_old_estimate(tmp_path, monkeypatch):
-    """The row the 128 GB job left (needs ~214 GB: 40 n^2) is rewritten with the measured need, and no
-    graph is loaded or GRC run when it still does not fit."""
-    import argparse
-    import e5_approx as E5
-    import registry as R
-    monkeypatch.setattr(common, "_TABLES", [])
-    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(300 * 1024))
-    monkeypatch.setattr(R, "load", lambda *a, **k: pytest.fail("no graph should be loaded"))
-    out = tmp_path / "out"
-    t = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"])
-    base = dict(graph="Epinions", n=75877, m=405739, deg_max=3044, threads=32)
-    for meth in ["orcut", "bf", "af3", "jl", "bf@lly", "af3@lly", "jl@lly"]:
-        t.add(dict(base, method=meth))
-    for meth in ["grc-mix", "grc-otd", "grc-otd-full", "grc-sinkhorn"]:
-        t.add(dict(base, method=meth, status="ok"))
-    old = "skipped: needs ~214 GB for the all-pairs distances of GRC's ATD, the job has 128 GB"
-    t.add(dict(base, method="grc-atd", status=old))
-    py = _script(tmp_path / "python", "exit 1")
-    a = argparse.Namespace(out=str(out), graphs=["real:Epinions"], grc_python=py, grc_atd_apsp="grc", data_dir=None,
-                           threads=32, hub=1000, grc_chunk=3600.0, grc_budget=None, grc_chunk_above=10**6)
-    E5.part_whole(a)
-    r = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"]).get(graph="Epinions", method="grc-atd")
-    assert r["status"] == "skipped: needs ~258 GB for the all-pairs distances of GRC's ATD, the job has 300 GB"
-    assert float(r["need_bytes"]) == E5.B.grc_atd_need(75877) and r["apsp"] == "grc"
-    monkeypatch.setenv("SLURM_MEM_PER_NODE", str(128 * 1024))  # a smaller job leaves the row as it is
-    monkeypatch.setattr(common, "_TABLES", [])
-    E5.part_whole(a)
-    r = common.Rows(str(out / "e5" / "whole.csv"), ["graph", "method"]).get(graph="Epinions", method="grc-atd")
-    assert r["status"].endswith("the job has 300 GB")

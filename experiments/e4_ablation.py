@@ -14,7 +14,7 @@ estimated from the bin counts. Configurations (``flags`` of :func:`orcut._core.c
              witness relays either)
   witness    the linear-size witness network alone (``orcut._witness``)
   oracle     explicit local distance matrix and three-level closure (``orcut._reference``,
-             the previous implementation)
+             the independent test oracle)
   pot        explicit local distance matrix (numba) and POT's network simplex (build included)
   graphflow  min-cost flow on the local graph (Beckmann; OR-Tools), no distance matrix
 

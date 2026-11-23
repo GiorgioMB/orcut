@@ -1,39 +1,20 @@
-"""E2. Per-edge cost of exact curvature, as a function of the neighbourhood size and structure.
+"""E2. The cost of one edge, as a function of its neighbourhoods.
 
-Part A (controlled edges, ``--part A``): one edge (0, 1) with |U_0| = a, |U_1| = b, t common
-neighbours, in five regimes of the distance structure of U_0 x U_1 (``datasets.edge_instance``):
-``tree`` (every pair at distance 3), ``sparse``, ``mixed``, ``dense`` (no pair at distance 3), and
-``hubleaf`` (U_1 = leaves of a hub). Two sweeps: symmetric (a = b = s, t = s / 8) and hub (a = 32,
-b = s, t = 4). Methods, all single-threaded and timed on the same edge after a warm-up:
+Part A: one edge (0, 1) with |U_0| = a, |U_1| = b and t common neighbours, in five regimes of the
+distance structure of U_0 x U_1 (``datasets.edge_instance``), over a symmetric sweep (a = b = s,
+t = s / 8) and a hub sweep (a = 32, b = s, t = 4). Every method runs single-threaded on the same
+edge: orcut (``ours``), orcut without witness relays (``nowitness``), the witness network alone
+(``witness``), graph min-cost flow (``graphflow``), the oracle of ``orcut._reference``, and, given
+the local distance matrix (whose construction is timed as ``build``), POT's network simplex
+(``pot``), ``ot.emd2``, OR-Tools' min-cost flow and HiGHS (LPs of at most ``--highs-max-vars``
+variables). A method whose problem cannot fit in the job's memory is skipped, with the reason in
+``<method>_status``.
 
-  ours        orcut.curvature, everything included (neighbourhoods, bitsets, cut);
-  nowitness   the same without witness relays (flag F_WITNESS off);
-  witness     the linear-size witness network alone (orcut._witness), everything included;
-  graphflow   min-cost flow on the local graph (Beckmann's formulation; OR-Tools), everything included
-              (it needs no distance matrix either);
-  oracle      orcut._reference, the independent test oracle (not the frozen 1.0.0 kernel): full local
-              distance matrix, three-level closure, recursive Dinic;
-  pot         POT's C++ network simplex on the mass-cancelled problem, given the distance matrix;
-  emd2        ot.emd2 (the public API that GraphRicciCurvature calls), given the distance matrix;
-  ortools     OR-Tools integer min-cost flow (C++), given the distance matrix;
-  highs       HiGHS LP, on LPs of at most ``--highs-max-vars`` variables (4098^2: the sym sweep up
-              to s = 4096 and the whole hub sweep; beyond, a solve takes days);
-  build       the time to build the local distance matrix and marginals (numba), which every
-              general-purpose solver needs.
+Part B: real graphs, edges binned by d_i + d_j: the per-edge time of each method per bin.
 
-Parts A and C have no time budget: every method runs at every size, except HiGHS beyond its LP size
-and what cannot fit in the job's memory (the reason is in <method>_status). Each method's result is
-saved as soon as it is computed (<out>/e2/partial/), so a stopped run resumes in the middle of a row.
-
-Part B (real graphs, ``--part B``): edges binned by d_i + d_j (powers of two); up to
-``--per-bin`` edges per bin; per-edge time of each method per bin, and the time per edge of the
-whole graph estimated from the bin shares.
-
-Part C (``--part C``): the instances of the query lower bounds of DasGupta, Grigorescu and Mukherjee
-(2023) (``datasets.dasgupta_instance``), with n = |L| = |R| up to 2^20: the local input is O(n), so
-the solver should take linear time, while a method that works on the distance matrix needs its n^2
-entries. Methods: ours, witness, graphflow, and POT given the distance matrix (with its build time)
-while it fits in the job's memory.
+Part C: the lower-bound instances of DasGupta, Grigorescu and Mukherjee (2023), n up to 2^20
+(``datasets.dasgupta_instance``): orcut, the witness network, graph min-cost flow, and POT given
+the distance matrix while it fits in memory.
 
 Usage: python e2_per_edge.py --part A|B|C [--out results] [--quick]
 """
@@ -93,21 +74,15 @@ def _method(parts, pk, meth, f, need, ref, repeat_below):
     return res
 
 
-def _row_left(rows, methods, caps=None, **key):
-    """None if the row is done; else the methods to compute: all if the row is not in the table,
-    else those that an earlier job gave up and this one can run (partial.retry_now), and those
-    skipped for a size limit (``caps``: method -> largest LP) that this run's limit admits."""
+def _row_left(rows, methods, **key):
+    """(methods to compute, the row so far): all methods if the row is not in the table, else those
+    that an earlier job gave up and this one can run (partial.retry_now); None if there are none."""
     import partial as PT
 
     old = rows.get(**key)
     if old is None or not rows.done(**key):
         return list(methods), None
-    caps = caps or {}
-    # a method with no time and no reason was skipped by the budgets of earlier versions: run it now
-    left = [m for m in methods if PT.retry_now(old, m) or
-            (common.num(old, f"{m}_s") != common.num(old, f"{m}_s") and not old.get(f"{m}_status")) or
-            (m in caps and str(old.get(f"{m}_status") or "").startswith("skipped: LP of") and
-             common.num(old, f"{m}_lp_vars") <= caps[m])]
+    left = [m for m in methods if PT.retry_now(old, m)]
     return (left, old) if left else (None, old)
 
 
@@ -156,7 +131,7 @@ def part_a(a):
             if regime == "dense" and s > 4096:  # 20% of |U_i| x |U_j| as cross edges: too many to generate
                 continue
             for seed in seeds:
-                left, old = _row_left(rows, methods, {"highs": a.highs_max_vars}, sweep=sweep, regime=regime, s=s, seed=seed)
+                left, old = _row_left(rows, methods, sweep=sweep, regime=regime, s=s, seed=seed)
                 if left is None:
                     continue
                 pk = (sweep, regime, s, seed)
@@ -202,7 +177,7 @@ def part_a(a):
                         continue
                     if meth == "ours":  # the kernel driver directly (no Python wrapper), like the C++ calls below
                         f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, nchunks=1)[0][0]
-                    elif meth == "nowitness":  # the default solver without witness relays (orcut <= 1.1 behaviour)
+                    elif meth == "nowitness":  # the default solver without witness relays
                         f = lambda: C.core_ids(g.indptr, g.indices, g.edges, eid, C.M_LAZY, flags=C.F_ALL & ~C.F_WITNESS,
                                                nchunks=1)[0][0]
                     elif meth == "witness":

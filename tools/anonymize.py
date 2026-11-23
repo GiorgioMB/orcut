@@ -61,25 +61,14 @@ CONTEXT = [
     ("install commands", r"(['\"]?)[\w.\-]+ ?@ ?git\+https?://github\.com/GiorgioMB/[^\s'\"`]+\1", "."),
     ("repository links", r"https?://github\.com/GiorgioMB\b[^\s'\"`)>\]]*", "{url}"),
     # PyPI's page of the package names its authors
-    ("package index", r"`?orcut`? is on PyPI as [^\n]*?, but that package is the solver alone; for the experiments"
-     r" and everything else beyond the solver, install from this repository\.", "Install from this repository."),
-    # the earlier paper's code: a sentence saying that this package's kernel *is* that code, or that
-    # the code depends on this package, says the two papers share authors, however the code is named
-    ("own earlier code", r"(?s)\*\s*\*\*1\.0\.0\*\*\s+is the solver used for every exact curvature in .*?reproduce that paper\.[ \t]*",
-     "* **1.0.0**: the original block kernel (lazy, non-lazy, LLY and the TLW certificate), kept frozen in\n"
-     "  `orcut/_kernels.py`."),
+    ("package index", r"(?m)^The solver alone is on PyPI as [^\n]*\n\n?", ""),
+    # the frozen kernel's docstring: the earlier paper's code, cited in the third person and unnamed
     ("own earlier code", r"It is the exact solver of\s+``curvature[\W_]*transfer`` v\d+\s+\([^)]*\),\s+extracted without changes",
      "It is kept\nwithout changes"),
     ("own earlier code", r"\s+of\s+``curvature[\W_]*transfer``(?=\.)", ""),
     ("own earlier code", r"The cascade \(:func:`curvature[\W_]*transfer\.screen`\) now", "The screening cascade now"),
-    ("own earlier code", r"The exact solver of `curvature[\W_]*transfer` v\d+, extracted without changes",
-     "The exact block solver"),
-    ("own earlier code", r"\s*\(the solver of the companion paper\)", ""),
-    # the earlier paper, cited in the third person and without its title or link
     ("earlier paper", r"\(the code used for the results of Micaletto and\s+Nigrelli,\s+\"[^\"]*\"\)",
      "(the code of an earlier paper)"),
-    ("earlier paper", r"in Micaletto and\s+Nigrelli,\s+\[?\*[^*]*\*\]?(?:\(\s*https?://[^)\s]*\s*\))?\s*:",
-     "in an earlier paper:"),
     ("earlier paper", r"\b(?:the|a|our)\s+companion\s+paper\b", "an earlier paper"),
     ("own arXiv links", r"\[([^\]]*)\]\(\s*https?://arxiv\.org/(?:abs|pdf)/" + ARXIV + r"[^)\s]*\s*\)", r"\1"),
     ("own arXiv links", r"[(<]?https?://arxiv\.org/(?:abs|pdf)/" + ARXIV + r"[^\s)>]*[)>]?", ""),
@@ -87,15 +76,7 @@ CONTEXT = [
     # this paper: no pointer to its non-anonymous preprint, nor to the venue a version was written for
     ("own preprint", r"\bthe\s+arXiv\s+(?:paper|preprint|version)\b", "the paper"),
     ("venue labels", r"[ \t]*\((?:LoG|ICML|NeurIPS|ICLR|KDD|AISTATS|TMLR|AAAI|WWW|SDM)[ \t]*\d{4}[ \t]+version\)", ""),
-    # venues named outside such labels (figure widths): another venue's layout says there is another version
-    ("venue names", r"\(LoG 5\.5, ICML 6\.75\)", "(5.5 by default; 6.75 for two columns)"),
-    ("venue names", r"5\.5 for LoG, the(\s+)default; 6\.75 for ICML, whose two-column figures span the page",
-     r"5.5, the\1default; 6.75 for two columns, whose figures span the page"),
-    ("venue names", r"for ICML's two(\s+)columns", r"for two\1columns"),
-    ("venue names", r"the(\s+)ICML layout", r"a\1two-column layout"),
-    # the anonymizer itself is not copied: no mention of it, of what it removes, or of its archive
-    ("anonymizer", r"`anonymize\.py` \(the anonymized copy for double-blind review\);\s*", ""),
-    ("anonymizer", r"(?ms)^- `tools/anonymize\.py`:.*?(?=^- |^## |\Z)", ""),
+    # the anonymizer itself is not copied, nor is its archive named
     ("anonymizer", r"(?m)^anonymous\.zip(?:\.tmp)?\n", ""),
     ("copyright", r"Copyright \(c\) (\d{4}) Giorgio Micaletto", r"Copyright (c) \1 Anonymous Authors"),
 ]

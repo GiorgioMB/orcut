@@ -98,7 +98,7 @@ def test_predicted_time(tmp_path, monkeypatch):
 
 def test_synth_plan_stops_at_the_sizes_that_were_run():
     p = E.synth_plan()
-    assert len(p) == 89 and len(E.synth_plan(all_sizes=True)) == 96
+    assert len(p) == 89
     have = {(f, r, n) for f, r, n, _ in p}
     assert ("CL2.1", "fixed16", 3 * 10**6) in have and ("CL2.1", "fixed16", 10**7) not in have
     assert ("RGG", "grow0.4", 10**6) in have and ("ER", "grow0.4", 10**6) not in have
@@ -124,7 +124,7 @@ def test_a_completed_log_gives_its_row_again_without_solving(g, tmp_path, monkey
 
 
 def test_a_chunk_finished_after_the_row_was_written_is_dropped(g, tmp_path, monkeypatch):
-    """Up to 1.4.0, such a chunk started a second log from an old copy of the first."""
+    """Such a chunk is dropped: saving it would start a second log from an old copy of the first."""
     monkeypatch.setattr(common, "_TABLES", [])
     full, claims, path = tmp_path / "full.json", tmp_path / "claims", tmp_path / "x.json"
     state, tot, finish = _solve(g, full, claims)  # the complete log of another worker

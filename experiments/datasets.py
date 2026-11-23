@@ -1,7 +1,7 @@
 """Graphs of the experiments.
 
 * ``bundled``: small real networks shipped in ``experiments/data`` (Karate, Jazz, Yeast, Power Grid,
-  arXiv HepPh), as in the companion paper.
+  arXiv HepPh).
 * ``REAL``: real networks downloaded on first use (SNAP, GitHub mirrors of MUSAE / gnn-benchmark),
   from 10^5 to 1.2 x 10^8 edges, cached as ``<data_dir>/<tag>.npz`` (largest connected component).
 * ``synthetic``: seeded random graphs with numpy/numba generators that scale to 10^7 vertices
@@ -21,7 +21,7 @@ import os
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from numba import njit
@@ -292,15 +292,13 @@ def ws(n: int, k: int, beta: float, seed: int) -> np.ndarray:
     return _unique_pairs(u, v)
 
 
-def chung_lu(n: int, avg_deg: float, gamma: float, seed: int, max_deg: Optional[float] = None) -> np.ndarray:
+def chung_lu(n: int, avg_deg: float, gamma: float, seed: int) -> np.ndarray:
     """Chung--Lu graph with power-law expected degrees (exponent gamma), m = n avg_deg / 2 edges
     sampled with endpoint probabilities proportional to the weights (duplicates merged)."""
     rng = np.random.default_rng(seed)
     i = np.arange(1, n + 1, dtype=np.float64)
     w = i ** (-1.0 / (gamma - 1.0))
     w *= avg_deg * n / w.sum()
-    if max_deg is not None:
-        w = np.minimum(w, max_deg)
     p = w / w.sum()
     m = int(round(n * avg_deg / 2))
     return _unique_pairs(rng.choice(n, m, p=p), rng.choice(n, m, p=p))

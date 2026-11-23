@@ -1,19 +1,13 @@
-"""Run GraphRicciCurvature (GRC) on one graph, as a user would; called by E5 in the GRC environment.
+"""Run GraphRicciCurvature (GRC) 0.6.1 on one graph, as a user would; called by E5 in GRC's environment.
 
-GRC 0.6.1 caps scipy <= 1.13.1, so it lives in its own environment (``grc-environment.yml``); this
-script imports neither orcut nor numba. Input: an ``.npz`` with ``n`` and ``edges`` (one row per
-undirected edge, the order of the results); output: an ``.npz`` with ``curvature`` (aligned with the
-input edges, or with ``--ids``), ``time_s`` (wall time of ``compute_ricci_curvature_edges``,
-including GRC's shortest-path precomputation and its process pool) and the settings.
+Input: an ``.npz`` with ``n`` and ``edges``; output: an ``.npz`` with ``curvature`` (aligned with the
+edges, or with ``--ids``) and ``time_s``, the wall time of ``compute_ricci_curvature_edges``
+(including GRC's shortest paths and its process pool). GRC's defaults: alpha = 0.5,
+``OTDSinkhornMix`` (``ot.emd2``, or Sinkhorn when both endpoints have more than 2000 neighbours),
+``nbr_topk = 3000``; all-pairs shortest paths up to ``--apsp-max-nodes`` vertices, pairwise beyond.
 
-GRC's defaults (0.6.1): alpha = 0.5 (idleness 1/2), method "OTDSinkhornMix" (POT's ``ot.emd2``
-with its default ``numItermax = 100000``, or Sinkhorn with regularization 0.1 when both endpoints
-have more than 2000 neighbours), ``nbr_topk = 3000`` (a vertex of larger degree keeps 3000 of its
-neighbours), ``shortest_path = "all_pairs"`` (an n x n float64 matrix).
-
-Usage (in the GRC environment):
-  python grc_runner.py IN.npz OUT.npz [--alpha 0.5] [--method OTDSinkhornMix] [--nbr-topk 3000]
-                       [--proc 32] [--shortest-path auto|all_pairs|pairwise] [--ids IDS.npy] [--apsp-array]
+Usage: python grc_runner.py IN.npz OUT.npz [--alpha 0.5] [--method OTDSinkhornMix] [--nbr-topk 3000]
+                           [--proc 32] [--shortest-path auto|all_pairs|pairwise] [--ids IDS.npy]
 """
 from __future__ import annotations
 
@@ -39,21 +33,11 @@ def main():
                     help="with auto: all_pairs up to this many vertices, pairwise beyond (GRC builds the n x n "
                          "matrix from n^2 Python floats, about 48 n^2 bytes at peak)")
     ap.add_argument("--ids", default=None, help=".npy of edge ids (rows of edges) to compute; default all")
-    ap.add_argument("--apsp-array", action="store_true",
-                    help="all_pairs: take NetworKit's distance table as an array (getDistances(asarray=True), about "
-                         "16 n^2 bytes at peak) instead of GRC's list of n^2 Python floats (about 48 n^2); the same "
-                         "distances, without GRC's conversion")
     a = ap.parse_args()
 
     import networkx as nx
     import GraphRicciCurvature
-    import GraphRicciCurvature.OllivierRicci as ORC
     from GraphRicciCurvature.OllivierRicci import OllivierRicci
-
-    if a.apsp_array:  # GRC calls this module-level function once per run, for its global table _apsp
-        import networkit as nk
-
-        ORC._get_all_pairs_shortest_path = lambda: nk.distance.APSP(ORC._Gk).run().getDistances(asarray=True)
 
     z = np.load(a.inp)
     n = int(z["n"])
@@ -76,8 +60,7 @@ def main():
     val = np.array([res[(u, v)] if (u, v) in res else res[(v, u)] for u, v in edge_list], dtype=np.float64)
     tmp = a.out + ".tmp.npz"
     np.savez(tmp, curvature=val, ids=ids, time_s=dt, alpha=a.alpha, method=a.method, nbr_topk=a.nbr_topk,
-             shortest_path=sp, proc=a.proc, grc_version=getattr(GraphRicciCurvature, "__version__", "?"),
-             apsp="array" if a.apsp_array else "grc")
+             shortest_path=sp, proc=a.proc, grc_version=getattr(GraphRicciCurvature, "__version__", "?"))
     os.replace(tmp, a.out)
     print(f"GRC {a.method} alpha={a.alpha} topk={a.nbr_topk} sp={sp} proc={a.proc}: {len(ids)} edges in {dt:.2f}s",
           file=sys.stderr)

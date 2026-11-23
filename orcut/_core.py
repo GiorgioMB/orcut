@@ -1,34 +1,25 @@
-"""Generalized one-step kernel (orcut >= 1.1).
+"""The solver: exact curvature of one-step measures by one minimum cut per edge.
 
-The same reduction as :mod:`orcut._kernels` (frozen at 1.0.0), for every pair of
-one-step measures m_i on N[i] and m_j on N[j] given by integer masses:
+The reduction of :mod:`orcut._kernels` for every pair of one-step measures m_i on N[i] and m_j on
+N[j] given by integer masses:
 
 * ``M_LAZY``    m_u uniform on the closed neighbourhood (idleness 1/(deg+1));
 * ``M_NONLAZY`` m_u uniform on the open neighbourhood;
 * ``M_IDLE``    uniform idleness p = pn/pd: mass p at u, (1-p)/deg on each neighbour;
-* ``M_LLY``     ``M_IDLE`` at p = 1/(deg_max + 1), rescaled by 1/(1-p): the
-                Lin--Lu--Yau curvature (idleness linearity of Bourne et al., 2018);
-* ``M_WALK``    a weighted lazy walk: rational idleness a_u/b_u at u and the rest
-                split over N(u) in proportion to positive integer edge weights.
+* ``M_LLY``     ``M_IDLE`` at p = 1/(deg_max + 1), rescaled by 1/(1-p): the Lin--Lu--Yau
+                curvature (idleness linearity of Bourne et al., 2018);
+* ``M_WALK``    a weighted lazy walk: rational idleness a_u/b_u at u and the rest split over N(u)
+                in proportion to positive integer edge weights.
 
-The cost is the hop distance of the graph, so every pair of S = N[i] u N[j] is
-at distance at most 2 except pairs of U_i x U_j, which are at distance 1, 2, or
-3; the measures only enter through the capacities of the closure network.
-
-Differences from the 1.0.0 kernel: masses are per vertex (arrays), the TLW
-certificate is not computed, every engineering step can be switched off
-(``F_TWINS``, ``F_RELAYS``, ``F_FAST``, ``F_WARM``, ``F_WITNESS``, for ablations;
-values do not depend on the flags), and every edge reports diagnostics
-(``N_DIAG`` columns) and its exact value as an integer fraction W1 = num / den.
-
-Witness relays (1.2, ``F_WITNESS``): a pair of P x N at distance 2 has a common
-neighbour w, and every pair of (N(w) & P) x (N(w) & N) is within distance 2, so
-one zero-weight relay per such w can carry the implications of all of them. The
-kernel uses them in two ways: for the pairs left at distance 2 after the relays
-H1--H4, when that gives a network at least four times smaller (``PATH_CUTW``);
-and for the whole edge (:mod:`orcut._witness`, ``PATH_WIT``) when the bitsets
-would cost more than ``dispatch`` times the local input, the sum of the degrees
-of the rows and columns, which bounds the size of the witness network.
+Every pair of S = N[i] u N[j] is at distance at most 2 except pairs of U_i x U_j, at distance 1, 2
+or 3; the measures only enter through the capacities of the closure network. Every engineering
+step can be switched off for ablations (``F_TWINS``, ``F_RELAYS``, ``F_FAST``, ``F_WARM``,
+``F_WITNESS``; the values do not depend on the flags), and every edge reports diagnostics
+(``N_DIAG`` columns) and its exact value W1 = num / den. Witness relays (``F_WITNESS``) carry the
+pairs at distance 2 through one zero-weight node per common neighbour: for the pairs left after
+the relays H1--H4 when that gives a network at least four times smaller (``PATH_CUTW``), and for
+the whole edge (:mod:`orcut._witness`, ``PATH_WIT``) when the bitsets would cost more than
+``dispatch`` times the local input.
 """
 from __future__ import annotations
 

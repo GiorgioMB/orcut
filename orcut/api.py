@@ -72,8 +72,6 @@ def exact(graph, which: Sequence[str] = ("c_OR", "c_OR0", "c_LLY"), edges: Optio
     return out
 
 
-# ------------------------------------------------------------------ orcut >= 1.1
-
 def curvature(graph, measure="lazy", edges: Optional[np.ndarray] = None, n_jobs: Optional[int] = None,
               exact_fraction: bool = False, diagnostics: bool = False, flags: Optional[int] = None):
     """Exact curvature 1 - W1(m_i, m_j) of the undirected edges of ``graph`` (all, or the edge ids

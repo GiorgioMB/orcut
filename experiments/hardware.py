@@ -1,25 +1,13 @@
-"""Hardware, for artifacts.py: calibration across node types, and the processors behind each row.
+"""Hardware, for artifacts.py: calibration across node types, and the processor behind each row.
 
-A cluster run can resume on another type of node, so the rows of a table may come from different
-processors. Two optional inputs say how much that matters (artifacts.py produces nothing from them
-when they are absent):
-
-``results/calib/<type>/e3/real.csv``: a few graphs timed again on one node of each type with E3's
-protocol (experiments/README.md, "Calibration across node types"); ``<type>/cpu.txt`` may name the
-processor, which the table shows instead of ``<type>``. Table ``calib``; keys ECalibNodeTypes,
-ECalibGraphs, ECalibTimeSpreadMax (largest ratio, over graphs, of the slowest to the fastest node
-type for our time), ECalibPotSpreadMax (the same for POT's estimate), ECalibRatioSpreadMax (the same
-for POT's estimate over our time), ECalibSolveRatioMin and ECalibSolveRatioMax (the range of POT's
-solve alone over our time).
-
-``results/provenance/rows.csv``, from ``tools/provenance.py`` (main.py writes it before the
-artifacts when Slurm's sacct is there): the candidate nodes of every row of every step. The
-processor of a node comes from ``results/provenance/nodes.txt`` (each node on which main.py ran a
-step, and its processor: main.py records them) or else from ``results/provenance/types.txt`` (the
-letters that start the names of a kind of node, then its processor), for runs before 1.4.4. Table ``provenance`` (rows per processor and
-step); keys EProvRows, EProvOpen (rows whose candidate nodes have different processors), and, for
-the steps whose comparisons span several rows of a graph, EProv<Step>Graphs and EProv<Step>Mixed
-(graphs whose rows come from more than one processor).
+A run can resume on another type of node, so the rows of a table may come from different
+processors. Two optional inputs say how much that matters (without them nothing is produced):
+``results/calib/<type>/e3/real.csv``, a few graphs timed again on one node of each type (step
+``calib``; ``<type>/cpu.txt`` names its processor), gives the table ``calib`` and the keys
+``ECalib...``; ``results/provenance/rows.csv``, from ``tools/provenance.py``, gives the table
+``provenance`` and the keys ``EProv...``. The processor of a node comes from
+``results/provenance/nodes.txt``, which main.py writes, or else from ``results/provenance/types.txt``
+(one line per kind of node: the letters that start its names, then its processor).
 """
 from __future__ import annotations
 

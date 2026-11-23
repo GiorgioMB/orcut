@@ -1,6 +1,6 @@
 """artifacts.py, E4: a configuration that did not run on some graphs (POT where the dense local
 problems exceed the memory guard: est_total_s empty) gives its ratios over the graphs where it ran,
-not an empty key (up to 1.4.0: '--')."""
+not an empty key."""
 import os
 import sys
 

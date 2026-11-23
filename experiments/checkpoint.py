@@ -1,21 +1,11 @@
 """Step-level checkpoints of ``main.py``.
 
-When a step ends, main.py records how it went in ``<out>/status/<step>.json``: exit code, state,
-duration, the configuration it ran with (:func:`done` compares it), host, job, git commit, command.
-A step recorded with exit code 0 under the same configuration is done and is not run again.
-Every step writes only its own record, so steps that run at the same time (``slurm/array.sbatch``)
-never overwrite each other's; ``<out>/status.json`` gathers all records and is only a view
-(rebuilt after every step). Records of main.py up to v1.2.0, which kept only ``status.json``, are
-read as well.
-
-While a step runs, ``<out>/status/<step>.lock`` names the host, process and job that run it, and
-main.py touches it every minute. Another main.py that finds the lock skips the step rather than run
-it a second time at once (both would rewrite the same result tables), unless the run that holds it
-is gone: Slurm says its job has ended (killed, cancelled, out of memory, time limit), or it is this
-very job restarted, or (without Slurm) its process is not running on this host, or nobody touched
-the lock for ``STALE_S`` seconds. A job that is still completing gets ``ENDING_WAIT_S`` seconds to
-release it. The lock is advisory: two runs that find the same stale lock in the same instant may
-both start.
+When a step ends, main.py records in ``<out>/status/<step>.json`` its exit code, duration, the
+configuration it ran with (:func:`done` compares it), host, job and command; a step recorded with
+exit code 0 under the same configuration is done. ``<out>/status.json`` gathers the records. While a
+step runs, ``<out>/status/<step>.lock`` keeps another main.py from running it at the same time,
+unless the run that holds it is gone: its Slurm job has ended, or (without Slurm) its process is
+not running on this host, or nobody touched the lock for ``STALE_S`` seconds.
 """
 from __future__ import annotations
 
@@ -95,12 +85,7 @@ def state(rc: Optional[int]) -> str:
 def load(out: str, step: str) -> Optional[dict]:
     """The record of the last run of ``step``, or None if it never ran."""
     rec = xio.read_json(record_path(out, step), default=None)
-    if isinstance(rec, dict):
-        return rec
-    # status.json mirrors the per-step records (they carry "record"); an entry without it was
-    # written by main.py up to v1.2.0, which kept nothing else
-    old = (xio.read_json(os.path.join(out, "status.json"), default={}) or {}).get(step)
-    return old if isinstance(old, dict) and "record" not in old else None
+    return rec if isinstance(rec, dict) else None
 
 
 def save(out: str, step: str, rec: dict) -> None:
@@ -109,16 +94,13 @@ def save(out: str, step: str, rec: dict) -> None:
 
 
 def summary(out: str) -> None:
-    """Rewrite ``<out>/status.json`` from the per-step records (entries of main.py up to v1.2.0
-    stay for the steps that have no record of their own)."""
-    path = os.path.join(out, "status.json")
-    old = xio.read_json(path, default={}) or {}
-    merged = {k: v for k, v in old.items() if isinstance(v, dict) and "record" not in v}
+    """Rewrite ``<out>/status.json`` from the per-step records."""
+    merged = {}
     for p in sorted(glob.glob(os.path.join(status_dir(out), "*.json"))):
         rec = xio.read_json(p, default=None)
         if isinstance(rec, dict):
             merged[os.path.basename(p)[:-len(".json")]] = rec
-    xio.atomic_json(merged, path)
+    xio.atomic_json(merged, os.path.join(out, "status.json"))
 
 
 def done(rec: Optional[dict], config: dict) -> Tuple[bool, Optional[Tuple[str, object]]]:
@@ -127,22 +109,17 @@ def done(rec: Optional[dict], config: dict) -> Tuple[bool, Optional[Tuple[str, o
     another value of ``key`` (value ``KeyError`` when its record does not say)."""
     if not rec or rec.get("returncode") != 0:
         return False, None
-    have = rec.get("config")
+    have = rec.get("config") if isinstance(rec.get("config"), dict) else {}
     for k, v in config.items():
-        if isinstance(have, dict) and k in have:
-            got = have[k]
-        elif k == "quick" and "quick" in rec:  # records of main.py up to v1.2.0
-            got = rec["quick"]
-        else:
+        if k not in have:
             return False, (k, KeyError)
-        if got != v:
-            return False, (k, got)
+        if have[k] != v:
+            return False, (k, have[k])
     return True, None
 
 
 def quick_of(rec: dict) -> bool:
-    cfg = rec.get("config")
-    return bool(cfg.get("quick") if isinstance(cfg, dict) and "quick" in cfg else rec.get("quick", False))
+    return bool(rec.get("quick"))
 
 
 def inputs_fingerprint(out: str) -> str:

@@ -53,7 +53,6 @@ def ortools_fraction(g, e, measure, spec, lp):
     if measure != "walk":
         a, b, M, L, aint, bint = lp.build(int(e), True)
         return Fraction(B.ortools_mcf(aint, bint, M), L)
-    import orcut
     from orcut.certify import _bfs_all, measures_of_edge
 
     i, j = map(int, g.edges[e])
@@ -81,7 +80,7 @@ def ortools_fraction(g, e, measure, spec, lp):
 
 def run_graph(spec, rows, a):
     import orcut
-    from orcut import _core as C, _layered as LY, _reference as RF
+    from orcut import _layered as LY, _reference as RF
 
     todo = [m for m in MEASURES if not rows.done(graph=R.display(spec), measure=m)]
     if not todo:  # every measure of this graph is in the table: nothing to load or compute

@@ -13,7 +13,7 @@ port of orcut._kernels._dinic with shuffled arc orders, and checks
 
 Usage: python tools/check_phases.py [EDGES]   (default 400; 600 take a few minutes);
 tests/test_theory.py runs a small version."""
-import math, random, sys, itertools
+import math, random, sys
 from collections import defaultdict
 from fractions import Fraction as Fr
 import numpy as np, networkx as nx
@@ -151,7 +151,6 @@ def make_net(G, i, j, inst, variant, merge):
     for y in N:
         b1[y] = net.node("b", -mu[y]); b2[y] = net.node("b", 2 * -mu[y])
         net.arc(b1[y], t, -mu[y]); net.arc(b2[y], t, -mu[y])
-    T = {s: None, t: None}
     row_nodes = []
     for key, xs in groups.items():
         cap = sum(mu[x] for x in xs)
@@ -330,7 +329,6 @@ def random_graph(rng):
 def matching_family(m):
     """Even-Tarjan's matching family G_m (their Section 4), embedded as an edge by Theorem 9."""
     G = nx.Graph(); G.add_edge(0, 1)
-    L = {(i, j): 2 + len([1 for _ in range(0)]) for i in range(1, m + 1) for j in range(1, i + 1)}
     idx = {}
     for (i, j) in [(i, j) for i in range(1, m + 1) for j in range(1, i + 1)]:
         idx[("a", i, j)] = len(idx) + 2

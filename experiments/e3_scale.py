@@ -1,36 +1,20 @@
 """E3. Exact curvature of every edge of large graphs.
 
-Part ``real``: real networks from 10^5 to 1.2 x 10^8 edges (``registry.MEDIUM``, ``LARGE``,
-``XLARGE``). For every graph: wall time of orcut on all edges with ``--threads`` threads (median of
-``--reps`` runs; one run above 10^7 edges), peak memory of the solve above the loaded graph, and the
-diagnostics (share of edges solved by one bipartite flow, row compression by twin merging on edges
-with an endpoint of degree at least 100, network sizes). The time of the POT pipeline (local distance
-matrix and network simplex) is estimated from a stratified sample of edges (bins of d_i + d_j),
-timed single-threaded, extrapolated to all edges and divided by the number of threads (perfect
-parallel scaling, a lower bound on its parallel time).
+Part ``real``: the 20 real networks (``registry.MEDIUM``, ``LARGE``, ``XLARGE``): time of orcut on all
+edges with ``--threads`` threads (median of ``--reps`` runs; one above 10^7 edges), the growth of the
+resident set during the solve, and the diagnostics of the solver. The time of the POT pipeline
+(local distance matrix and network simplex) is estimated from a stratified sample of edges, timed
+single-threaded, extrapolated to all edges and divided by the number of threads: a lower bound on
+its parallel time.
 
-Part ``threads``: strong scaling (1, 2, 4, ..., ``--threads``) on ``--graphs``.
+Part ``threads``: strong scaling (1, 2, 4, ..., ``--threads``).
 
-Part ``synth``: random families (ER, BA, RGG, WS, Chung--Lu 2.1 / 2.5) with average degree 16 and
-n = 10^3 .. 10^7 (CL2.1: up to 3 x 10^6), and with average degree 2.1 n^0.4 (as in the companion
-paper), n = 10^3 .. 10^6 (ER, BA: up to 3 x 10^5; CL2.1, CL2.5: up to 10^5); time against the number
-of edges. The larger sizes (``SYNTH_MAX_N``; ``--all-sizes`` plans them too) take weeks to months:
-the first of the 3,085 chunks of CL2.1 at n = 10^7 alone took 5.3 h on 32 threads. Synthetic rows
-have no POT estimate (``--synth-pot`` adds it): the paper uses their time only, and on CL2.1 the
-estimate, which times every sampled edge however long it takes, held a solved row for days.
+Part ``synth``: random families (ER, BA, RGG, WS, Chung--Lu 2.1 and 2.5) with average degree 16 and
+n = 10^3 .. 10^7, and with average degree 2.1 n^0.4, n = 10^3 .. 10^6, up to ``SYNTH_MAX_N``.
 
-Long solves are saved as they go. A graph of part ``real`` with more than ``--chunk-above`` edges
-(10^7), and a row of part ``synth`` that the two previous sizes of its family predict to take more
-than ``--chunk-after`` seconds (an hour), is solved in one pass (no warm-up, no repeats; the
-diagnostics come from the same pass) by contiguous chunks of edges, about 20 or more, balanced by
-the size of their two-hop scans. After each chunk, its time, peak memory and diagnostic counts go
-to ``<out>/e3/partial/*.json``, so a run stopped by the time limit resumes at the next chunk. The
-row's time is the sum over its chunks and its peak memory the largest over them (the per-edge
-outputs are held for one chunk at a time); its ``chunks`` column says how many, ``chunks_timed`` how
-many timings the time sums (the same number), ``chunk_hosts`` on how many machines they ran. A
-worker that finishes a chunk after another one has written the row (its chunk log is then
-``*.done.json``) drops the chunk instead of starting a second log; a row whose log is complete but
-which is missing from the table is written again from that log.
+Graphs above ``--chunk-above`` edges, and synthetic rows predicted to take over ``--chunk-after``
+seconds, are solved in one pass by saved chunks of edges (``solve_chunked``), so a run stopped by
+its time limit resumes at the next chunk; their time is the sum over the chunks.
 
 Usage: python e3_scale.py --part real|threads|synth [--graphs ...] [--threads 32] [--out results]
 """
@@ -462,18 +446,11 @@ def predicted_time(rows, fam, regime, seed, m):
 
 
 def synth_row(rows, fam, regime, n, seed):
-    """The row of the synthetic graph requested with n vertices. Rows record the size of its largest
-    component (n, smaller than requested for Chung--Lu, and by a few vertices for ER or RGG at 10^7)
-    and, from now on, the size requested (n_target); older rows are matched by their size, which
-    is at most n and more than n/3 (consecutive sizes of a sweep differ by 3x or more)."""
+    """The row of the synthetic graph requested with n vertices (``n_target``; its ``n`` is the size
+    of the largest component)."""
     for r in rows.rows:
-        if r.get("family") != fam or r.get("regime") != regime or str(r.get("seed")) != str(seed):
-            continue
-        nt = common.num(r, "n_target")
-        if nt == nt:
-            if int(nt) == n:
-                return r
-        elif n / 3 < common.num(r, "n") <= n:
+        if (r.get("family"), r.get("regime"), str(r.get("seed"))) == (fam, regime, str(seed)) and \
+                common.num(r, "n_target") == n:
             return r
     return None
 
@@ -499,7 +476,7 @@ SYNTH_MAX_N = {("CL2.1", "fixed16"): 3 * 10**6, ("ER", "grow0.4"): 3 * 10**5, ("
                ("CL2.1", "grow0.4"): 10**5, ("CL2.5", "grow0.4"): 10**5}
 
 
-def synth_plan(quick=False, all_sizes=False):
+def synth_plan(quick=False):
     """[(family, regime, n, average degree)] of part synth, in the order it runs them."""
     fams = ["ER", "BA", "RGG", "WS", "CL2.1", "CL2.5"]
     sizes_fixed = [10**3, 3 * 10**3, 10**4, 3 * 10**4, 10**5, 3 * 10**5, 10**6, 3 * 10**6, 10**7]
@@ -508,14 +485,12 @@ def synth_plan(quick=False, all_sizes=False):
         sizes_fixed, sizes_grow, fams = [10**3, 10**4], [10**3, 3 * 10**3], ["ER", "CL2.1"]
     plan = [(f, "fixed16", n, 16.0) for f in fams for n in sizes_fixed] + \
            [(f, "grow0.4", n, 2.1 * n ** 0.4) for f in fams for n in sizes_grow]
-    if not all_sizes:
-        plan = [p for p in plan if p[2] <= SYNTH_MAX_N.get((p[0], p[1]), p[2])]
-    return plan
+    return [p for p in plan if p[2] <= SYNTH_MAX_N.get((p[0], p[1]), p[2])]
 
 
 def part_synth(a):
     rows = Rows(f"{out_dir(a.out, 'e3')}/synth.csv", ["family", "regime", "n", "seed"])
-    plan = synth_plan(a.quick, a.all_sizes)
+    plan = synth_plan(a.quick)
     claims = os.path.join(out_dir(a.out, "e3", "partial"), "claims")  # chunks and rows taken by workers
     left = []  # rows left to other workers (main.py --worker): the step is done only once they are
     pending = [(fam, regime, n, d, seed) for fam, regime, n, d in plan for seed in range(a.seeds)
@@ -565,12 +540,7 @@ def part_synth(a):
         W2 = float(np.sum((g.deg[g.edges[:, 0]] + g.deg[g.edges[:, 1]]).astype(float) ** 2))
         row = dict(family=fam, regime=regime, n=nn, n_target=n, avg_deg_target=d, seed=seed, m=g.num_edges,
                    deg_max=int(g.deg.max()), sum_dsum=W, sum_dsum2=W2, threads=a.threads, time_s=t, **extra)
-        pck = os.path.join(out_dir(a.out, "e3", "partial"), f"synth.pot.{R.slug(fam)}.{regime}.n{n}.s{seed}.json")
-        if a.synth_pot and not a.no_pot:
-            full, solve, timed, free = pot_estimate(g, per_bin=a.pot_per_bin, max_pairs=a.pot_max_pairs, ckpt=pck)
-            row.update(pot_est_1thread_s=full, pot_est_s=full / a.threads, pot_free_share=free)
         rows.add(row)
-        _finish_chunked(pck)
         if ckpt:
             _finish_chunked(ckpt)
         if finish is not None:
@@ -591,9 +561,6 @@ def main():
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--lazy-only", action="store_true")
     ap.add_argument("--no-pot", action="store_true", help="skip the POT estimate")
-    ap.add_argument("--synth-pot", action="store_true", help="part synth: estimate the POT pipeline too (not used by the paper)")
-    ap.add_argument("--all-sizes", action="store_true",
-                    help="part synth: also the sizes beyond SYNTH_MAX_N (weeks to months each)")
     ap.add_argument("--pot-per-bin", type=int, default=50)
     ap.add_argument("--pot-max-pairs", type=float, default=5e7,
                     help="edges with (d_i+1)(d_j+1) above this count as free in the POT estimate (memory)")
