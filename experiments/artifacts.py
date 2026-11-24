@@ -6,8 +6,24 @@ lists every key with its source; and the figures ``fig-*.pdf``. A missing result
 its keys undefined (the paper then shows a red placeholder). ``--provisional`` marks every number
 with a dagger (results of a quick run).
 
+``--layout`` sets the size of every figure for the paper it goes into: ``log`` (one column of 5.5 in:
+the LoG style, also used for the arXiv preprint) or ``icml`` (two columns of 3.25 in, 6.75 in in
+all: the main-text figure fills one column, the appendix figures the one-column appendix). Figures
+are drawn at the size they are printed at, so their text has the size it is given here.
+
+``--fonts type1`` (the default) typesets the text of the figures with LaTeX in Times, so that the
+PDFs contain Type-1 fonts only, as LoG and ICML require; it needs ``latex`` on the PATH.
+``--fonts truetype`` embeds TrueType fonts instead, without LaTeX. Every figure is checked after it
+is written: a Type-3 font (matplotlib's default) is an error.
+
+Numbers whose decimals are all zeros lose them in the keys (6.0x -> 6x, 0.0% -> 0%, 0.40 stays):
+``--strip-zeros all`` does the same in the table bodies, ``none`` keeps every digit.
+
+``experiments/paper_dirs.py`` writes the folders of the three versions of the paper at once.
+
 Usage: python artifacts.py [--results results] [--paper-dir results/paper] [--provisional]
-                    [--fig-width 6.75] [--method-name ours]
+                    [--layout log|icml] [--fig-width 5.5] [--fonts type1|truetype]
+                    [--strip-zeros keys|all|none] [--method-name ours]
 """
 from __future__ import annotations
 
@@ -15,6 +31,8 @@ import argparse
 import sys
 import math
 import os
+import re
+import shutil
 import traceback
 from typing import Dict, List
 
@@ -33,12 +51,28 @@ class Out:
         self.provisional = provisional
         self.missing: List[str] = []
 
-    def put(self, key: str, value: str, source: str):
+    def put(self, key: str, value: str, source: str, strip: bool = True):
+        """``strip=False`` for values that are not numbers (names, versions, processors)."""
+        if strip and STRIP_ZEROS in ("keys", "all"):
+            value = strip_zeros(value)
         self.keys[key] = value + (r"\textsuperscript{\dag}" if self.provisional else "")
         self.src[key] = source
 
     def table(self, name: str, lines: List[str]):
+        if STRIP_ZEROS == "all":
+            lines = [strip_zeros(ln) for ln in lines]
         self.rows[name] = "\n".join(lines)
+
+
+STRIP_ZEROS = "keys"  # --strip-zeros: where numbers whose decimals are all zeros lose them
+_ZERO_DECIMALS = re.compile(r"(?<![\d.])(\d+)\.0+(?![\d.])")
+
+
+def strip_zeros(s: str) -> str:
+    r"""Drop decimals that are all zeros from every number in ``s``: 6.0\times -> 6\times,
+    0.0\% -> 0\%, 1.0\times10^{-14} -> 1\times10^{-14}, 3.00 -> 3. Other decimals stay (0.40,
+    10.4), and so do versions and dotted names (9.15.9999, 3.12.16), which are not numbers."""
+    return _ZERO_DECIMALS.sub(r"\1", s)
 
 
 # ------------------------------------------------------------- formatting
@@ -130,6 +164,18 @@ def f_pct(p, dec: int = 1) -> str:
     return rf"{100 * p:.{dec}f}\%"
 
 
+PAGE_MB = 4096 / 2**20  # one memory page: the resolution of the resident-set size
+
+
+def f_mem(mb) -> str:
+    """Growth of the resident set in MB: 0 when it is not above one page (the sampling cannot see
+    less, and 0.0039 MB, one page of 4 KiB, read as a measurement)."""
+    mb = float(mb)
+    if not math.isfinite(mb):
+        return "--"
+    return "0" if mb <= PAGE_MB * (1 + 1e-9) else f_num(mb, 2)
+
+
 def tex_name(s: str) -> str:
     r"""A graph or method name for LaTeX: K_{20} -> $K_{20}$, mu=0.3 -> $\mu{=}0.3$, specials escaped."""
     import re
@@ -138,6 +184,11 @@ def tex_name(s: str) -> str:
     s = re.sub(r"([A-Za-z])_\{([^}]*)\}", r"$\1_{\2}$", s)
     s = re.sub(r"(?<!\$)_", r"\\_", s) if "$" not in s else s
     return s.replace("mu=", r"$\mu{=}$")
+
+
+def key_name(s: str) -> str:
+    """A graph or method name inside a key: letters and digits only ('Twitch-DE' -> 'TwitchDE')."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(s))
 
 
 def short_name(s: str) -> str:
@@ -199,14 +250,102 @@ def block_e1(R, O: Out):
 # ------------------------------------------------------------------ E2
 
 METHOD = "orcut"  # the solver's name in figure legends and table labels (--method-name; e.g. "ours" for review)
-E2_METHODS = [("ours", "{method}", "-", "o"), ("nowitness", "{method}, no witness relays", (0, (4, 1.5)), "."),
-              ("witness", "witness network alone", (0, (1, 1)), "P"),
-              ("graphflow", "graph min-cost flow", "-.", "*"),
-              ("pot", "POT (given distances)", "--", "s"), ("emd2", "ot.emd2 (given distances)", ":", "^"),
-              ("ortools", "OR-Tools (given distances)", "-.", "D"), ("highs", "HiGHS (given distances)", ":", "v"),
-              ("oracle", "oracle", "--", "x")]
+# (key, label, line style, marker, colour): one colour per method in every figure, whichever methods
+# it shows (matplotlib's colour cycle gave OR-Tools another colour once ot.emd2 was drawn before it)
+E2_METHODS = [("ours", "{method}", "-", "o", "#1f77b4"),
+              ("nowitness", "{method}, no witness relays", (0, (4, 1.5)), ".", "#ff7f0e"),
+              ("witness", "witness network alone", (0, (1, 1)), "P", "#2ca02c"),
+              ("graphflow", "graph min-cost flow", "-.", "*", "#d62728"),
+              ("pot", "POT (given distances)", "--", "s", "#9467bd"),
+              ("ortools", "OR-Tools (given distances)", "-.", "D", "#8c564b"),
+              ("emd2", "ot.emd2 (given distances)", ":", "^", "#e377c2"),
+              ("highs", "HiGHS (given distances)", ":", "v", "#7f7f7f"),
+              ("oracle", "oracle", "--", "x", "#bcbd22")]
 E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
-FIG_W = 5.5  # text width of the paper (inches; --fig-width): figures are drawn at the width they are printed at
+
+# ------------------------------------------------------------- layouts and fonts
+# Text widths of the paper (inches). Figures are drawn at the width they are printed at, so that their
+# text keeps the size set here: log is one column of 5.5 in (LoG style, arXiv preprint); icml is two
+# columns of 3.25 in, 6.75 in in all, with a one-column appendix.
+LAYOUTS = {"log": {"text": 5.5, "column": 5.5},
+           "icml": {"text": 6.75, "column": 3.25}}
+# per figure: (width: the text or one column, height in inches; None: the figure computes it)
+FIGURES = {"log": {"fig-per-edge": ("column", 2.3), "fig-per-edge-all": ("text", None),
+                   "fig-synth": ("text", 2.1), "fig-tradeoff": ("text", 3.4)},
+           "icml": {"fig-per-edge": ("column", 2.75), "fig-per-edge-all": ("text", None),
+                    "fig-synth": ("text", 2.45), "fig-tradeoff": ("text", 3.9)}}
+LAYOUT = "log"
+FIG_W = 5.5  # text width (--fig-width; by default that of --layout)
+FONTS = "type1"
+# Times for text and mathematics, like the body of both papers (LoG and ICML set it in Times)
+TEX_PREAMBLE = r"\usepackage[T1]{fontenc}\usepackage{mathptmx}\usepackage{amsmath}"
+
+
+def fig_size(name: str, height=None):
+    """(width, height) in inches of figure ``name`` (without .pdf) in the current layout."""
+    where, h = FIGURES[LAYOUT][name]
+    w = FIG_W if where == "text" else min(FIG_W, LAYOUTS[LAYOUT]["column"])
+    return w, (h if h is not None else height)
+
+
+def setup_fonts(mode: str):
+    """``type1``: text set by LaTeX (Type-1 fonts in the PDF); ``truetype``: matplotlib's own fonts,
+    embedded as TrueType. Either way no Type-3 font, which LoG and ICML do not accept."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    if mode == "type1":
+        if not shutil.which("latex"):
+            raise SystemExit("artifacts: --fonts type1 needs latex on the PATH (it typesets the text of the figures, "
+                             "so that they contain Type-1 fonts only); install TeX Live or use --fonts truetype")
+        matplotlib.rcParams.update({"text.usetex": True, "text.latex.preamble": TEX_PREAMBLE,
+                                    "font.family": "serif", "font.serif": ["Times"],
+                                    "pdf.fonttype": 42, "ps.fonttype": 42})
+    elif mode == "truetype":
+        matplotlib.rcParams.update({"text.usetex": False, "pdf.fonttype": 42, "ps.fonttype": 42})
+    else:
+        raise ValueError(mode)
+
+
+def _usetex() -> bool:
+    import matplotlib
+
+    return bool(matplotlib.rcParams["text.usetex"])
+
+
+def lab(s: str) -> str:
+    """A label for a figure: as is, or escaped for LaTeX when LaTeX sets the text (outside $...$)."""
+    s = str(s)
+    if not _usetex():
+        return s
+    parts = s.split("$")
+    for k in range(0, len(parts), 2):  # outside math
+        parts[k] = re.sub(r"([&%#_])", r"\\\g<1>", parts[k])
+    return "$".join(parts)
+
+
+def quoted(s: str) -> str:
+    """'s', with proper quotes when LaTeX sets the text."""
+    return f"`{s}'" if _usetex() else f"'{s}'"
+
+
+def pdf_fonts(path: str) -> List[str]:
+    """Subtypes of the fonts of a PDF written by matplotlib (Type1, TrueType, Type3, ...)."""
+    data = open(path, "rb").read()
+    return [m.decode() for m in re.findall(rb"/Subtype\s*/(Type1C?|Type3|TrueType|Type0|CIDFontType[02])\b", data)]
+
+
+class FontError(RuntimeError):
+    """A figure with fonts that LoG and ICML do not accept: the run stops (it is not a missing table)."""
+
+
+def save_figure(fig, path: str):
+    """Write the figure and check its fonts: no Type 3; with --fonts type1, Type 1 only."""
+    fig.savefig(path)
+    fonts = set(pdf_fonts(path))
+    bad = fonts & {"Type3"} if FONTS != "type1" else fonts - {"Type1", "Type1C"}
+    if bad:
+        raise FontError(f"{path}: fonts {sorted(bad)} (LoG and ICML accept Type-1 fonts only)")
 
 
 def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
@@ -246,9 +385,6 @@ def _slope(x, y):
 
 
 def block_e2(R, O: Out, figdir: str):
-    import matplotlib
-
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     d = load(R, "e2/controlled.csv")
@@ -292,7 +428,7 @@ def block_e2(R, O: Out, figdir: str):
         O.put(f"ETwoSym{key}Max", f_x(r.max()), f"e2: ({what})/ours at that size, max over regimes")
         if key == "NoWitness":
             O.put("ETwoSymNoWitnessMaxRegime", str(at_["regime"].iloc[int(np.argmax(r))]),
-                  "e2: regime of the largest gain of the witness relays")
+                  "e2: regime of the largest gain of the witness relays", strip=False)
     if "graphflow_s" in g and len(hub):
         okh = hub.dropna(subset=["graphflow_s", "ours_s"])
         if len(okh):
@@ -339,37 +475,42 @@ def block_e2(R, O: Out, figdir: str):
     # memory of the general-purpose input at the largest size
     O.put("ETwoDistBytesMax", f_num(d["pot_input_bytes"].max() / 2**20) + r"\,MB", "e2: POT cost matrix at largest size")
     # figure: two panels per sweep, regime 'mixed' (others in the appendix figure)
-    for name, regimes, keys in (("fig-per-edge.pdf", ["mixed"], E2_MAIN),
-                                ("fig-per-edge-all.pdf", list(g["regime"].unique()), [m[0] for m in E2_METHODS])):
-        fig, axes = plt.subplots(len(regimes), 2, figsize=(FIG_W, 2.3 if len(regimes) == 1 else 1.5 * len(regimes)),
-                                 squeeze=False)
+    from matplotlib.ticker import NullFormatter
+
+    for name, regimes, keys in (("fig-per-edge", ["mixed"], E2_MAIN),
+                                ("fig-per-edge-all", list(g["regime"].unique()), [m[0] for m in E2_METHODS])):
+        w, h = fig_size(name, height=(1.5 if LAYOUT == "log" else 1.65) * len(regimes))
+        fig, axes = plt.subplots(len(regimes), 2, figsize=(w, h), squeeze=False)
+        narrow = w / 2 < 2.0  # panels of one column: the caption names the regime of the main figure
         for r_i, regime in enumerate(regimes):
             for c_i, sweep in enumerate(["sym", "hub"]):
                 ax = axes[r_i, c_i]
                 sub = g[(g["sweep"] == sweep) & (g["regime"] == regime)].sort_values("s")
-                for key, lab, ls, mk in E2_METHODS:
+                for key, label, ls, mk, colour in E2_METHODS:
                     col = f"{key}_s"
                     if key in keys and col in sub and sub[col].notna().any():
-                        ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, label=lab.format(method=METHOD))
+                        ax.loglog(sub["s"], sub[col], linestyle=ls, marker=mk, ms=3, lw=1.1, color=colour,
+                                  label=lab(label.format(method=METHOD)))
                 if "build_s" in sub:
                     ax.loglog(sub["s"], sub["build_s"], color="0.6", lw=0.8, label="distances only")
-                from matplotlib.ticker import NullFormatter
                 ax.xaxis.set_minor_formatter(NullFormatter())
                 ax.set_xlabel(r"$|\mathcal{U}_i| = |\mathcal{U}_j|$" if sweep == "sym" else r"$|\mathcal{U}_j|$ ($|\mathcal{U}_i| = 32$)",
                               fontsize=7)
                 ax.set_ylabel("seconds per edge", fontsize=7)
-                ax.set_title(f"{'symmetric' if sweep == 'sym' else 'hub'} sweep, regime '{regime}'", fontsize=7)
+                sweep_name = "symmetric sweep" if sweep == "sym" else "hub sweep"
+                ax.set_title(sweep_name if narrow and len(regimes) == 1 else f"{sweep_name}, regime {quoted(regime)}",
+                             fontsize=7)
                 ax.tick_params(labelsize=6)
                 ax.grid(True, which="major", lw=0.3, alpha=0.5)
-        h, l = axes[0, 0].get_legend_handles_labels()
+        h_, l_ = axes[0, 0].get_legend_handles_labels()
         for ax_ in axes.flat:  # methods that appear only in some panels
             for hh, ll in zip(*ax_.get_legend_handles_labels()):
-                if ll not in l:
-                    h.append(hh)
-                    l.append(ll)
-        bottom = _legend_below(fig, h, l, 6, handlelength=2.6, columnspacing=1.2)
-        fig.tight_layout(rect=(0, bottom, 1, 1))
-        fig.savefig(os.path.join(figdir, name))
+                if ll not in l_:
+                    h_.append(hh)
+                    l_.append(ll)
+        bottom = _legend_below(fig, h_, l_, 6, handlelength=2.6, columnspacing=1.2 if not narrow else 0.8)
+        fig.tight_layout(rect=(0, bottom, 1, 1), w_pad=0.6 if narrow else None)
+        save_figure(fig, os.path.join(figdir, name + ".pdf"))
         plt.close(fig)
     # real graphs, per bin
     try:
@@ -457,8 +598,7 @@ def block_e3(R, O: Out, figdir: str):
         sp = pot / float(r["time_s"]) if math.isfinite(pot) else float("nan")
         tw = float(r.get("twin_ratio_hub", float("nan")))
         lines.append(" & ".join([tex_name(r["graph"]), f_num(r["n"]), f_num(r["m"]), f_int(r["deg_max"]),
-                                 f_time(r["time_s"]), f_time(pot), f_x(sp),
-                                 f_num(float(r["peak_extra_mb"]), 2) if math.isfinite(float(r["peak_extra_mb"])) else "--",
+                                 f_time(r["time_s"]), f_time(pot), f_x(sp), f_mem(r["peak_extra_mb"]),
                                  f_num(tw, 2) if math.isfinite(tw) else "--"]) + r" \\")
     O.table("large", lines)
     ds = []
@@ -468,7 +608,7 @@ def block_e3(R, O: Out, figdir: str):
                               f_num(float(r["deg_mean"]), 3), (r"\citet{" + cite + "}") if cite else "--"]) + r" \\")
     O.table("datasets", ds)
     big = lz.iloc[-1]
-    O.put("EThreeLargestName", tex_name(big["graph"]), "e3/real: largest graph")
+    O.put("EThreeLargestName", tex_name(big["graph"]), "e3/real: largest graph", strip=False)
     O.put("EThreeLargestEdges", f_num(big["m"]), "e3/real: edges of the largest graph")
     O.put("EThreeLargestTime", f_time(big["time_s"]), "e3/real: time on the largest graph")
     O.put("EThreeThreads", f_int(big["threads"]), "e3/real: threads")
@@ -495,13 +635,15 @@ def block_e3(R, O: Out, figdir: str):
         O.put("EThreeShareFastMedian", f_pct(nanstat(np.nanmedian, lz["share_fast"].astype(float))), "e3/real: median share of the fast path")
     other = d[d["measure"] != "lazy"]
     if len(other):
-        rel = []
+        rel, with_base = [], set()
         for _, r in other.iterrows():
             base = lz[lz["graph"] == r["graph"]]
             if len(base):
                 rel.append(float(r["time_s"]) / float(base["time_s"].iloc[0]))
+                with_base.add(r["graph"])
         if rel:
             O.put("EThreeOtherMeasuresRelMax", f_x(max(rel)), "e3/real: max time(non-lazy or LLY)/time(lazy)")
+            O.put("EThreeOtherMeasuresGraphs", f_int(len(with_base)), "e3/real: graphs timed with the non-lazy or LLY curvature")
     # strong scaling
     try:
         t = load(R, "e3/threads.csv")
@@ -514,6 +656,8 @@ def block_e3(R, O: Out, figdir: str):
         O.put("EThreeScalingThreads", f_int(best[0][1]), "e3/threads: max threads")
         O.put("EThreeScalingMin", f_x(min(b[2] for b in best)), "e3/threads: min speedup at max threads")
         O.put("EThreeScalingMax", f_x(max(b[2] for b in best)), "e3/threads: max speedup at max threads")
+        for g_, T_, sp_ in best:
+            O.put("EThreeScaling" + key_name(g_), f_x(sp_), f"e3/threads: speedup at {T_} threads on {g_}")
     except FileNotFoundError:
         O.missing.append("e3/threads.csv")
     # synthetic scaling: exponent of time against sum_e (d_i + d_j)^2 and against m
@@ -527,12 +671,12 @@ def block_e3(R, O: Out, figdir: str):
                 O.missing.append(f"e3/synth.csv: {r['family']} {r['regime']} n={r['n']} sums "
                                  f"{int(r['chunks_timed'])} of {int(r['chunks'])} chunks")
         lines = []
-        fig, axes = plt.subplots(1, 2, figsize=(FIG_W, 2.1))
+        fig, axes = plt.subplots(1, 2, figsize=fig_size("fig-synth"))
         for ax, regime in zip(axes, ["fixed16", "grow0.4"]):
             sub = s[s["regime"] == regime]
             for fam, ss in sub.groupby("family"):
                 ss = ss.groupby("n").median(numeric_only=True).reset_index().sort_values("m")
-                ax.loglog(ss["m"], ss["time_s"], marker="o", ms=3, lw=1, label=fam)
+                ax.loglog(ss["m"], ss["time_s"], marker="o", ms=3, lw=1, label=lab(fam))
                 if len(ss) >= 3:
                     k = np.polyfit(np.log(ss["m"]), np.log(ss["time_s"]), 1)[0]
                     lines.append(f"{tex_name(fam)} & {regime.replace('fixed16', 'avg.~16').replace('grow0.4', r'$2.1n^{0.4}$')} & "
@@ -544,7 +688,7 @@ def block_e3(R, O: Out, figdir: str):
             ax.grid(True, lw=0.3, alpha=0.5)
         axes[0].legend(fontsize=6, frameon=False)
         fig.tight_layout()
-        fig.savefig(os.path.join(figdir, "fig-synth.pdf"))
+        save_figure(fig, os.path.join(figdir, "fig-synth.pdf"))
         plt.close(fig)
         O.table("synth", lines)
     except FileNotFoundError:
@@ -631,6 +775,8 @@ def block_e4(R, O: Out):
 
 # ------------------------------------------------------------------ E5
 
+E5_KEYS = {"grc-mix": "GrcMix", "grc-otd": "GrcOtd", "grc-otd-full": "GrcOtdFull", "grc-sinkhorn": "GrcSinkhorn",
+           "grc-atd": "GrcAtd", "jl": "JL", "bf@lly": "BF", "af3@lly": "AFThree"}  # EFiveRecall<key>
 E5_ORDER = [("grc-mix", "GRC default"), ("grc-otd", "GRC OTD"), ("grc-otd-full", "GRC OTD, all nbrs."),
             ("grc-sinkhorn", "GRC Sinkhorn"), ("grc-atd", "GRC ATD"),
             ("jl", "JL mean"), ("bf@lly", "BF"), ("af3@lly", "AF$_3$")]
@@ -659,8 +805,18 @@ def block_e5(R, O: Out, figdir: str):
                  f_pct(med("sign_disagree")), f_num(med("spearman"), 3), f_pct(med("recall_neg"), 0)]
         lines.append(" & ".join(cells) + r" \\")
     O.table("approx", lines)
+    # the share of the most negatively curved edges that each method recovers, as in the table
+    for meth, label in E5_ORDER:
+        sub = d[d["method"] == meth]
+        if "status" in sub:
+            sub = sub[(sub["status"].isna()) | (sub["status"] == "ok")]
+        if len(sub) and "recall_neg" in sub:
+            v = nanstat(np.nanmedian, sub["recall_neg"].astype(float))
+            if math.isfinite(v):
+                O.put("EFiveRecall" + E5_KEYS.get(meth, key_name(meth)), f_pct(v, 0),
+                      f"e5/whole: median share of the most negatively curved edges recovered ({label})")
     oc = d[d["method"] == "orcut"].set_index("graph")["time_s"].astype(float)
-    for meth, key in (("grc-mix", "Mix"), ("grc-otd", "Otd"), ("grc-sinkhorn", "Sinkhorn")):
+    for meth, key in (("grc-mix", "Mix"), ("grc-otd", "Otd"), ("grc-otd-full", "OtdFull"), ("grc-sinkhorn", "Sinkhorn")):
         sub = d[(d["method"] == meth) & ((d.get("status") == "ok") if "status" in d else True)]
         if len(sub):
             r = [float(t) / oc[g] for g, t in zip(sub["graph"], sub["time_s"]) if g in oc and oc[g] > 0]
@@ -675,7 +831,8 @@ def block_e5(R, O: Out, figdir: str):
     O.put("EFiveGraphs", f_int(d["graph"].nunique()), "e5/whole: graphs")
     if "jl_bounds_hold" in d:
         ok = d[d["method"] == "jl"]["jl_bounds_hold"].astype(str).str.lower().eq("true").all()
-        O.put("EFiveJLBoundsHold", "all" if ok else "not all", "e5/whole: JL bounds bracket the non-lazy curvature")
+        O.put("EFiveJLBoundsHold", "all" if ok else "not all", "e5/whole: JL bounds bracket the non-lazy curvature",
+              strip=False)
     try:
         import matplotlib.pyplot as plt
 
@@ -688,7 +845,7 @@ def block_e5(R, O: Out, figdir: str):
         regs = sorted(sk_all["reg"].astype(float).unique(), reverse=True)
         marks = dict(zip(regs, ["o", "s", "^", "D", "v", "P", "X", "*"] * 2))
         names = sorted(s["graph"].unique(), key=lambda x: str(x).lower())
-        fig, ax = plt.subplots(figsize=(FIG_W, 3.4))
+        fig, ax = plt.subplots(figsize=fig_size("fig-tradeoff"))
         handles = []
         for (col, ls), gname in zip(_graph_styles(len(names)), names):
             sub = s[s["graph"] == gname]
@@ -700,8 +857,8 @@ def block_e5(R, O: Out, figdir: str):
             o = sub[sub["method"] == "orcut"]
             if len(o):
                 ax.axvline(float(o["time_edge_weighted_s"].iloc[0]), color=col, ls=":", lw=0.9)
-            handles.append(Line2D([], [], color=col, ls=ls, lw=1.2, label=gname))
-        handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label=f"{METHOD} (exact)"))
+            handles.append(Line2D([], [], color=col, ls=ls, lw=1.2, label=lab(gname)))
+        handles.append(Line2D([], [], color="0.3", ls=":", lw=0.9, label=lab(f"{METHOD} (exact)")))
         ax.legend(handles=[Line2D([], [], ls="none", marker=marks[r], ms=4, color="0.25", label=f"{r:g}") for r in regs],
                   title=r"Sinkhorn, $\varepsilon$", loc="upper right", fontsize=7, title_fontsize=7, frameon=False,
                   handletextpad=0.3)
@@ -711,7 +868,7 @@ def block_e5(R, O: Out, figdir: str):
         ax.grid(True, lw=0.3, alpha=0.5)
         bottom = _legend_below(fig, handles, [h.get_label() for h in handles], 7, handlelength=2.6, columnspacing=1.2)
         fig.tight_layout(rect=(0, bottom, 1, 1))
-        fig.savefig(os.path.join(figdir, "fig-tradeoff.pdf"))
+        save_figure(fig, os.path.join(figdir, "fig-tradeoff.pdf"))
         plt.close(fig)
         r01 = s[(s["method"] == "sinkhorn") & (np.isclose(s["reg"].astype(float), 0.1))]
         oc = s[s["method"] == "orcut"].set_index("graph")["time_edge_weighted_s"].astype(float)
@@ -725,7 +882,7 @@ def block_e5(R, O: Out, figdir: str):
         rl = s[(s["method"] == "sinkhorn") & (np.isclose(s["reg"].astype(float), rmin))]
         if len(rl):
             ratio = [float(t) / oc[g] for g, t in zip(rl["graph"], rl["time_edge_weighted_s"]) if g in oc and math.isfinite(float(t))]
-            O.put("EFiveSinkhornSmallReg", f"{rmin:g}", "e5/sinkhorn: smallest regularization")
+            O.put("EFiveSinkhornSmallReg", f"{rmin:g}", "e5/sinkhorn: smallest regularization", strip=False)
             if ratio:
                 O.put("EFiveSinkhornSmallSlowdownMedian", f_x(np.median(ratio)), "e5/sinkhorn: time(smallest eps)/time(orcut)")
     except FileNotFoundError:
@@ -747,6 +904,10 @@ def block_e6(R, O: Out):
         nl = d[d["measure"] != "lazy"]["rel_lazy"].astype(float)
         O.put("ESixRelMax", f_x(nanstat(np.nanmax, nl)), "e6/measures: max time relative to lazy")
         O.put("ESixRelMedian", f_x(nanstat(np.nanmedian, nl)), "e6/measures: median time relative to lazy")
+        nll = d[d["measure"].isin(["nonlazy", "lly"])]["rel_lazy"].astype(float)
+        if len(nll):
+            O.put("ESixNonLazyLLYRelMax", f_x(nanstat(np.nanmax, nll)),
+                  "e6/measures: max time of the non-lazy and LLY curvatures relative to lazy")
     except FileNotFoundError:
         O.missing.append("e6/measures.csv")
     try:
@@ -773,29 +934,43 @@ def block_env(R, O: Out):
     if not env:
         raise FileNotFoundError(os.path.join(R, "environment.json"))
     cpu = str(env.get("cpu_model") or env.get("platform") or "unknown CPU")
-    O.put("EnvCpu", tex_name(cpu), "environment.json: cpu_model")
+    O.put("EnvCpu", tex_name(cpu), "environment.json: cpu_model", strip=False)
     O.put("EnvCores", f_int(env.get("cpu_count") or 0), "environment.json: cpu_count")
     for k, key in (("numba", "EnvNumba"), ("numpy", "EnvNumpy"), ("ot", "EnvPot"), ("ortools", "EnvOrtools"),
                    ("networkx", "EnvNetworkx"), ("python", "EnvPython"), ("orcut", "EnvOrcut")):
         if env.get(k):
-            O.put(key, tex_name(str(env[k])), f"environment.json: {k}")
+            O.put(key, tex_name(str(env[k])), f"environment.json: {k}", strip=False)
 
 
 def main():
-    global FIG_W, METHOD
+    global FIG_W, METHOD, LAYOUT, FONTS, STRIP_ZEROS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", default=common.RESULTS)
     ap.add_argument("--paper-dir", default=None)
     ap.add_argument("--provisional", action="store_true", help="mark every number as provisional (quick run)")
-    ap.add_argument("--fig-width", type=float, default=FIG_W,
-                    help="text width in inches at which the figures are drawn (5.5; 6.75 for a two-column layout)")
+    ap.add_argument("--layout", choices=sorted(LAYOUTS), default=LAYOUT,
+                    help="the paper the figures go into: log (one column of 5.5 in; LoG and the arXiv preprint) "
+                         "or icml (two columns of 3.25 in, 6.75 in in all)")
+    ap.add_argument("--fig-width", type=float, default=None,
+                    help="text width in inches (default: that of --layout, 5.5 or 6.75)")
+    ap.add_argument("--fonts", choices=("type1", "truetype"), default=FONTS,
+                    help="type1: text of the figures set by LaTeX in Times (needs latex); truetype: without LaTeX")
+    ap.add_argument("--strip-zeros", choices=("keys", "all", "none"), default=STRIP_ZEROS,
+                    help="where numbers whose decimals are all zeros lose them (6.0 -> 6): keys, keys and tables, nowhere")
     ap.add_argument("--method-name", default=METHOD,
                     help="the solver's name in figure legends and table labels (e.g. ours, for an anonymous version)")
     a = ap.parse_args()
-    FIG_W, METHOD = a.fig_width, a.method_name
+    LAYOUT, FONTS, STRIP_ZEROS, METHOD = a.layout, a.fonts, a.strip_zeros, a.method_name
+    FIG_W = a.fig_width if a.fig_width else LAYOUTS[LAYOUT]["text"]
+    setup_fonts(FONTS)
     paper = a.paper_dir or os.path.join(a.results, "paper")
     os.makedirs(paper, exist_ok=True)
     O = Out(a.provisional)
+    # how this folder was written: the LaTeX of each version checks them and flags a folder written
+    # for another version (another layout, the solver's name in an anonymous version, Type-3 fonts)
+    for key, value, src in (("ArtifactsLayout", LAYOUT, "--layout"), ("ArtifactsMethod", METHOD, "--method-name"),
+                            ("ArtifactsFonts", FONTS, "--fonts")):
+        O.keys[key], O.src[key] = value, f"artifacts.py {src}"  # never marked provisional
     for name, fn in (("env", lambda: block_env(a.results, O)),
                      ("E1", lambda: block_e1(a.results, O)), ("E2", lambda: block_e2(a.results, O, paper)),
                      ("E2C", lambda: block_e2c(a.results, O)),
@@ -807,6 +982,8 @@ def main():
             fn()
         except FileNotFoundError as ex:
             O.missing.append(str(ex))
+        except FontError:
+            raise
         except Exception:
             O.missing.append(f"{name}: error\n" + traceback.format_exc())
     lines = ["% generated by experiments/artifacts.py -- do not edit",
@@ -819,7 +996,9 @@ def main():
         lines.append(rf"\@namedef{{resrows@{k}}}{{%" + "\n" + v + "\n}")
     lines.append(r"\makeatother")
     xio.atomic_text("\n".join(lines) + "\n", os.path.join(paper, "solver_numbers.tex"))
-    md = ["# Keys of solver_numbers.tex", "", "| key | value | source |", "|---|---|---|"]
+    md = ["# Keys of solver_numbers.tex", "",
+          f"Layout `{LAYOUT}` (text width {FIG_W:g} in), fonts `{FONTS}`, method name `{METHOD}`, "
+          f"zeros stripped: `{STRIP_ZEROS}`.", "", "| key | value | source |", "|---|---|---|"]
     md += [f"| `{k}` | `{O.keys[k]}` | {O.src[k]} |" for k in sorted(O.keys)]
     md += ["", "## Tables", ""] + [f"- `{k}`: {len(v.splitlines())} rows" for k, v in sorted(O.rows.items())]
     if O.missing:

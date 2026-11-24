@@ -21,7 +21,8 @@ def test_pot_ratios_are_over_the_graphs_where_it_ran(tmp_path):
     O = A.Out(False)
     A.block_e4(str(tmp_path), O)
     assert O.keys["EFourPotGraphs"] == "2"
-    assert "8.0" in O.keys["EFourPotOverFullMax"] and "4.0" in O.keys["EFourPotOverFullMin"]
+    # 8.0x and 4.0x: decimals that are all zeros are dropped in the keys (artifacts.strip_zeros)
+    assert O.keys["EFourPotOverFullMax"] == r"\ensuremath{8\times}" and O.keys["EFourPotOverFullMin"] == r"\ensuremath{4\times}"
     assert "--" not in O.keys["EFourPotOverFullMedian"]
 
 

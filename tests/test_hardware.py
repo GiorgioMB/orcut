@@ -28,8 +28,9 @@ def test_calibration(tmp_path):
     O = A.Out(False)
     hardware.block_calib(str(tmp_path), O, A)
     assert O.keys["ECalibNodeTypes"] == "2" and O.keys["ECalibGraphs"] == "G1 and G2"
-    assert "2.0" in O.keys["ECalibTimeSpreadMax"] and "2.7" in O.keys["ECalibRatioSpreadMax"]
-    assert "0.50" in O.keys["ECalibSolveRatioMin"] and "2.0" in O.keys["ECalibSolveRatioMax"]
+    # 2.0x: decimals that are all zeros are dropped in the keys (artifacts.strip_zeros)
+    assert O.keys["ECalibTimeSpreadMax"] == r"\ensuremath{2\times}" and "2.7" in O.keys["ECalibRatioSpreadMax"]
+    assert "0.50" in O.keys["ECalibSolveRatioMin"] and O.keys["ECalibSolveRatioMax"] == r"\ensuremath{2\times}"
     assert "Processor A & G1" in O.rows["calib"] and "b & G2" in O.rows["calib"]
 
 
