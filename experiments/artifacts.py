@@ -6,13 +6,13 @@ lists every key with its source; and the figures ``fig-*.pdf``. A missing result
 its keys undefined (the paper then shows a red placeholder). ``--provisional`` marks every number
 with a dagger (results of a quick run).
 
-``--layout`` sets the size of every figure for the paper it goes into: ``log`` (one column of 5.5 in:
-the LoG style, also used for the arXiv preprint) or ``icml`` (two columns of 3.25 in, 6.75 in in
-all: the main-text figure fills one column, the appendix figures the one-column appendix). Figures
+``--layout`` sets the size of every figure for the paper it goes into: ``onecolumn`` (one column of
+5.5 in) or ``twocolumn`` (two columns of 3.25 in, 6.75 in in all: the main-text figure fills one
+column, the appendix figures the one-column appendix). Figures
 are drawn at the size they are printed at, so their text has the size it is given here.
 
 ``--fonts type1`` (the default) typesets the text of the figures with LaTeX in Times, so that the
-PDFs contain Type-1 fonts only, as LoG and ICML require; it needs ``latex`` on the PATH.
+PDFs contain Type-1 fonts only, as conference styles require; it needs ``latex`` on the PATH.
 ``--fonts truetype`` embeds TrueType fonts instead, without LaTeX. Every figure is checked after it
 is written: a Type-3 font (matplotlib's default) is an error.
 
@@ -22,7 +22,7 @@ Numbers whose decimals are all zeros lose them in the keys (6.0x -> 6x, 0.0% -> 
 ``experiments/paper_dirs.py`` writes the folders of the three versions of the paper at once.
 
 Usage: python artifacts.py [--results results] [--paper-dir results/paper] [--provisional]
-                    [--layout log|icml] [--fig-width 5.5] [--fonts type1|truetype]
+                    [--layout onecolumn|twocolumn] [--fig-width 5.5] [--fonts type1|truetype]
                     [--strip-zeros keys|all|none] [--method-name ours]
 """
 from __future__ import annotations
@@ -265,19 +265,19 @@ E2_MAIN = ("ours", "nowitness", "witness", "graphflow", "pot", "ortools")
 
 # ------------------------------------------------------------- layouts and fonts
 # Text widths of the paper (inches). Figures are drawn at the width they are printed at, so that their
-# text keeps the size set here: log is one column of 5.5 in (LoG style, arXiv preprint); icml is two
-# columns of 3.25 in, 6.75 in in all, with a one-column appendix.
-LAYOUTS = {"log": {"text": 5.5, "column": 5.5},
-           "icml": {"text": 6.75, "column": 3.25}}
+# text keeps the size set here: onecolumn is one column of 5.5 in; twocolumn is two columns of 3.25 in,
+# 6.75 in in all, with a one-column appendix.
+LAYOUTS = {"onecolumn": {"text": 5.5, "column": 5.5},
+           "twocolumn": {"text": 6.75, "column": 3.25}}
 # per figure: (width: the text or one column, height in inches; None: the figure computes it)
-FIGURES = {"log": {"fig-per-edge": ("column", 2.3), "fig-per-edge-all": ("text", None),
+FIGURES = {"onecolumn": {"fig-per-edge": ("column", 2.3), "fig-per-edge-all": ("text", None),
                    "fig-synth": ("text", 2.1), "fig-tradeoff": ("text", 3.4)},
-           "icml": {"fig-per-edge": ("column", 2.75), "fig-per-edge-all": ("text", None),
+           "twocolumn": {"fig-per-edge": ("column", 2.75), "fig-per-edge-all": ("text", None),
                     "fig-synth": ("text", 2.45), "fig-tradeoff": ("text", 3.9)}}
-LAYOUT = "log"
+LAYOUT = "onecolumn"
 FIG_W = 5.5  # text width (--fig-width; by default that of --layout)
 FONTS = "type1"
-# Times for text and mathematics, like the body of both papers (LoG and ICML set it in Times)
+# Times for text and mathematics, like the body of the paper in both layouts
 TEX_PREAMBLE = r"\usepackage[T1]{fontenc}\usepackage{mathptmx}\usepackage{amsmath}"
 
 
@@ -290,7 +290,7 @@ def fig_size(name: str, height=None):
 
 def setup_fonts(mode: str):
     """``type1``: text set by LaTeX (Type-1 fonts in the PDF); ``truetype``: matplotlib's own fonts,
-    embedded as TrueType. Either way no Type-3 font, which LoG and ICML do not accept."""
+    embedded as TrueType. Either way no Type-3 font, which conference styles do not accept."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -336,7 +336,7 @@ def pdf_fonts(path: str) -> List[str]:
 
 
 class FontError(RuntimeError):
-    """A figure with fonts that LoG and ICML do not accept: the run stops (it is not a missing table)."""
+    """A figure with fonts that conference styles do not accept: the run stops (it is not a missing table)."""
 
 
 def save_figure(fig, path: str):
@@ -345,7 +345,7 @@ def save_figure(fig, path: str):
     fonts = set(pdf_fonts(path))
     bad = fonts & {"Type3"} if FONTS != "type1" else fonts - {"Type1", "Type1C"}
     if bad:
-        raise FontError(f"{path}: fonts {sorted(bad)} (LoG and ICML accept Type-1 fonts only)")
+        raise FontError(f"{path}: fonts {sorted(bad)} (Type-1 fonts only are accepted)")
 
 
 def _legend_below(fig, handles, labels, fontsize, pad=0.015, **kw):
@@ -479,7 +479,7 @@ def block_e2(R, O: Out, figdir: str):
 
     for name, regimes, keys in (("fig-per-edge", ["mixed"], E2_MAIN),
                                 ("fig-per-edge-all", list(g["regime"].unique()), [m[0] for m in E2_METHODS])):
-        w, h = fig_size(name, height=(1.5 if LAYOUT == "log" else 1.65) * len(regimes))
+        w, h = fig_size(name, height=(1.5 if LAYOUT == "onecolumn" else 1.65) * len(regimes))
         fig, axes = plt.subplots(len(regimes), 2, figsize=(w, h), squeeze=False)
         narrow = w / 2 < 2.0  # panels of one column: the caption names the regime of the main figure
         for r_i, regime in enumerate(regimes):
@@ -949,8 +949,7 @@ def main():
     ap.add_argument("--paper-dir", default=None)
     ap.add_argument("--provisional", action="store_true", help="mark every number as provisional (quick run)")
     ap.add_argument("--layout", choices=sorted(LAYOUTS), default=LAYOUT,
-                    help="the paper the figures go into: log (one column of 5.5 in; LoG and the arXiv preprint) "
-                         "or icml (two columns of 3.25 in, 6.75 in in all)")
+                    help="onecolumn: one column of 5.5 in; twocolumn: two columns of 3.25 in, 6.75 in in all")
     ap.add_argument("--fig-width", type=float, default=None,
                     help="text width in inches (default: that of --layout, 5.5 or 6.75)")
     ap.add_argument("--fonts", choices=("type1", "truetype"), default=FONTS,

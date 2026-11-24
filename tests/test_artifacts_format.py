@@ -1,6 +1,6 @@
 """artifacts.py: numbers without decimals that are all zeros, the memory column, the keys behind
 the numbers of the text, one colour per method in every figure, the sizes of the two layouts, and
-figures with Type-1 fonts only (LoG and ICML)."""
+figures with Type-1 fonts only."""
 import os
 import shutil
 import sys
@@ -50,11 +50,11 @@ def test_every_method_has_its_own_colour():
 
 
 def test_layout_sizes(monkeypatch):
-    monkeypatch.setattr(A, "LAYOUT", "icml")
-    monkeypatch.setattr(A, "FIG_W", A.LAYOUTS["icml"]["text"])
+    monkeypatch.setattr(A, "LAYOUT", "twocolumn")
+    monkeypatch.setattr(A, "FIG_W", A.LAYOUTS["twocolumn"]["text"])
     assert A.fig_size("fig-per-edge")[0] == 3.25  # one column
     assert A.fig_size("fig-tradeoff")[0] == 6.75  # the one-column appendix
-    monkeypatch.setattr(A, "LAYOUT", "log")
+    monkeypatch.setattr(A, "LAYOUT", "onecolumn")
     monkeypatch.setattr(A, "FIG_W", 5.5)
     assert A.fig_size("fig-per-edge")[0] == 5.5 and A.fig_size("fig-per-edge-all", 7.5) == (5.5, 7.5)
 
