@@ -1,6 +1,6 @@
-"""The generalized one-step kernel (orcut._core): bit-identical to the 1.0.0 kernel on the
-lazy, non-lazy and LLY measures under every ablation flag, and exact (against linear
-programming) for uniform idleness and weighted walks."""
+"""The one-step solver (orcut._core): bit-identical to the oracle on the lazy, non-lazy and LLY
+measures under every ablation flag, and exact (against linear programming) for uniform idleness
+and weighted walks."""
 from fractions import Fraction
 
 import networkx as nx
@@ -10,7 +10,7 @@ import pytest
 import orcut
 from conftest import _w1, random_graphs, small_graphs
 from orcut import _core as C
-from orcut import _kernels as K
+from orcut import _oracle as R
 from orcut import measures as Ms
 
 
@@ -27,10 +27,10 @@ GRAPHS = small_graphs() + random_graphs(2) + [nx.barabasi_albert_graph(300, 4, s
 
 
 @pytest.mark.parametrize("G", GRAPHS, ids=lambda g: f"n{g.number_of_nodes()}m{g.number_of_edges()}")
-def test_core_matches_frozen_kernel_under_every_flag(G):
+def test_core_matches_oracle_under_every_flag(G):
     _, g = _g(G)
     ids = np.arange(g.num_edges, dtype=np.int64)
-    ref = K.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 3)
+    ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, ids, True, True, True, 3)
     for mode, col in ((C.M_LAZY, 0), (C.M_NONLAZY, 1), (C.M_LLY, 2)):
         for flags in range(32):
             v, num, diag = C.core_ids(g.indptr, g.indices, g.edges, ids, mode, flags=flags, nchunks=3)
@@ -40,13 +40,14 @@ def test_core_matches_frozen_kernel_under_every_flag(G):
                 assert np.array_equal(v, 1.0 - num[:, 0] / num[:, 1])
 
 
-def test_curvature_api_matches_exact():
+def test_curvature_api_matches_oracle():
     G, g = _g(nx.karate_club_graph())
-    ex = orcut.exact(g)
-    assert np.array_equal(orcut.curvature(g), ex["c_OR"])
-    assert np.array_equal(orcut.curvature(g, "nonlazy"), ex["c_OR0"])
-    assert np.array_equal(orcut.curvature(g, "lly"), ex["c_LLY"])
-    assert np.array_equal(orcut.curvature(g, 0), ex["c_OR0"])
+    ids = np.arange(g.num_edges, dtype=np.int64)
+    ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, ids, True, True, True, 2)
+    assert np.array_equal(orcut.curvature(g), ref[:, 0])
+    assert np.array_equal(orcut.curvature(g, "nonlazy"), ref[:, 1])
+    assert np.array_equal(orcut.curvature(g, "lly"), ref[:, 2])
+    assert np.array_equal(orcut.curvature(g, 0), ref[:, 1])
 
 
 @pytest.mark.parametrize("p", [Fraction(1, 2), Fraction(1, 3), Fraction(2, 7), 0.25])

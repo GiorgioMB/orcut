@@ -28,7 +28,7 @@ from __future__ import annotations
 import numpy as np
 from numba import njit, prange
 
-from ._kernels import INF, _csr, _dinic, _take_i
+from ._flow import INF, _csr, _dinic, _take_i
 
 K_LAZY = 0
 K_NONLAZY = 1
@@ -425,7 +425,7 @@ def _layered_run(indptr, indices, edges, ids, kind, r, want_cert, nchunks):
 def layered_ids(indptr, indices, edges, ids, kind, r=1, certify=False, nchunks=None):
     """Curvatures of edges[ids] by the layered closure (reference implementation; see the module
     docstring for ``kind``). Returns (values, diagnostics (K, N_LDIAG))."""
-    from ._kernels import _ids, _nchunks
+    from ._flow import _ids, _nchunks
     if kind in (K_LAZY, K_NONLAZY):
         r = 1
     if r < 1:

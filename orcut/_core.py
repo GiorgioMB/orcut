@@ -1,6 +1,6 @@
 """The solver: exact curvature of one-step measures by one minimum cut per edge.
 
-The reduction of :mod:`orcut._kernels` for every pair of one-step measures m_i on N[i] and m_j on
+The reduction of the paper (one minimum cut per edge) for every pair of one-step measures m_i on N[i] and m_j on
 N[j] given by integer masses:
 
 * ``M_LAZY``    m_u uniform on the closed neighbourhood (idleness 1/(deg+1));
@@ -26,7 +26,7 @@ from __future__ import annotations
 import numpy as np
 from numba import njit, prange
 
-from ._kernels import (INF, U0, U1, _BLOCK_BUDGET, _WARM_MIN_ARCS, _csr, _ctz, _dedupe, _dinic, _maxflow,
+from ._flow import (INF, U0, U1, _BLOCK_BUDGET, _WARM_MIN_ARCS, _csr, _ctz, _dedupe, _dinic, _maxflow,
                        _popcount, _setbit, _take_i, _take_u)
 
 from ._base import M_IDLE, M_LAZY, M_LLY, M_NONLAZY, M_WALK, _LMAX, _gcd  # noqa: F401 (re-exported)
@@ -730,7 +730,7 @@ def _edge_core(indptr, indices, wts, Dp, nself, coef, gdv, i0, j0, mode, pn, pd,
     for t in range(nC):
         cm[nUj + t] = -rm[nUi + t]
 
-    # ---- distance-free local structure (as in orcut 1.0.0)
+    # ---- distance-free local structure
     ns = 0
     msum = np.int64(0)
     for kk in range(nc):
@@ -978,7 +978,7 @@ def core_ids(indptr, indices, edges, ids, mode, pn=0, pd=1, flags=F_ALL, nchunks
     ``walk`` = (wts, Dp, nself, coef, gdv) for ``M_WALK`` (see :func:`orcut.measures.walk_tables`).
     ``dispatch``: bound on the bitset work, in multiples of the local input, beyond which an edge is
     solved on the witness network (0: never; needs ``F_WITNESS``)."""
-    from ._kernels import _ids, _nchunks
+    from ._flow import _ids, _nchunks
     if mode == M_WALK:
         if walk is None:
             raise ValueError("M_WALK needs the walk tables")

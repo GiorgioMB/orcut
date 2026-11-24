@@ -1,4 +1,4 @@
-"""The production exact solver (orcut._kernels) against the oracle
+"""The production exact solver (orcut._core, through orcut.curvature) against the oracle
 (orcut._oracle): different formulation, different distance computation, different
 max-flow code, so bit-identical outputs on varied graphs are a strong check.
 The oracle itself is checked against linear programming in test_exact.py."""
@@ -6,8 +6,9 @@ import networkx as nx
 import numpy as np
 import pytest
 
+import orcut
 from orcut import Graph
-from orcut import _kernels as K
+from orcut import _core as C
 from orcut import _oracle as R
 
 
@@ -52,72 +53,54 @@ def _all(g):
     return np.arange(g.num_edges, dtype=np.int64)
 
 
+def _production(g, nchunks=None):
+    """Lazy, non-lazy and LLY curvatures of the production solver, as the oracle's first three columns."""
+    ids = _all(g)
+    return np.column_stack([C.core_ids(g.indptr, g.indices, g.edges, ids, mode, nchunks=nchunks)[0]
+                            for mode in (C.M_LAZY, C.M_NONLAZY, C.M_LLY)])
+
+
 @pytest.mark.parametrize("family", sorted(FAMILIES))
 @pytest.mark.parametrize("seed", [0, 1])
 def test_matches_oracle_on_random_families(family, seed):
     g = _g(FAMILIES[family](seed))
-    new = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, True, 3)
     ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, _all(g), True, True, True, 3)
-    assert np.array_equal(new, ref, equal_nan=True)
+    assert np.array_equal(_production(g, 3), ref[:, :3], equal_nan=True)
 
 
 @pytest.mark.parametrize("name", sorted(FIXED))
 def test_matches_oracle_on_fixed_graphs(name):
     g = _g(FIXED[name])
-    new = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, True, 2)
     ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, _all(g), True, True, True, 2)
-    assert np.array_equal(new, ref, equal_nan=True)
+    assert np.array_equal(_production(g, 2), ref[:, :3], equal_nan=True)
 
 
 def test_closed_forms():
     g = _g(nx.complete_graph(6))  # identical lazy laws; non-lazy: move 1/d from j to i
-    out = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, False, 1)
-    assert np.allclose(out[:, 0], 1.0) and np.allclose(out[:, 1], 1 - 1 / 5)
+    assert np.allclose(orcut.curvature(g), 1.0) and np.allclose(orcut.curvature(g, "nonlazy"), 1 - 1 / 5)
     g = _g(nx.path_graph(2))
-    out = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, False, 1)
-    assert out[0, 0] == 1.0 and out[0, 1] == 0.0
+    assert orcut.curvature(g)[0] == 1.0 and orcut.curvature(g, "nonlazy")[0] == 0.0
     g = _g(nx.star_graph(3))  # center-leaf, lazy: W1 = 3/4 -> 1/4
-    out = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, False, False, 1)
-    assert np.allclose(out[:, 0], 0.25)
-
-
-def test_driver_modes_agree():
-    g = _g(nx.powerlaw_cluster_graph(200, 3, 0.5, seed=3))
-    ids = _all(g)
-    ex = K.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 4)
-    assert np.array_equal(K.exact_or_ids(g.indptr, g.indices, g.edges, ids, 4), ex[:, 0])
-    assert np.array_equal(K.tlw_lazy_ids_local(g.indptr, g.indices, g.edges, ids, 4), ex[:, 3])
-    assert np.all(ex[:, 3] >= ex[:, 0] - 1e-12)  # TLW is an upper bound on c_OR
-    tau, tol = float(np.median(ex[:, 0])), 1e-9
-    sc = K.screen_ids(g.indptr, g.indices, g.edges, ids, tau, tol, 4)
-    decided = sc[:, 1] + tol < tau
-    assert np.array_equal(sc[:, 1], ex[:, 3])
-    assert np.all(np.isnan(sc[decided, 0])) and np.array_equal(sc[~decided, 0], ex[~decided, 0])
-
-
-def test_requested_columns_only():
-    g = _g(nx.karate_club_graph())
-    out = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), False, True, False, 2)
-    assert np.all(np.isnan(out[:, [0, 2, 3]])) and not np.any(np.isnan(out[:, [1, 4]]))
+    assert np.allclose(orcut.curvature(g), 0.25)
 
 
 def test_column_blocking_is_exact():
     """Tiny bitset budget: columns are processed in many blocks."""
     g = _g(nx.barabasi_albert_graph(300, 4, seed=5))
     ids = _all(g)
-    full = K._run(g.indptr, g.indices, g.edges, ids, 0, True, True, True, 0.0, 0.0, K.N_EXACT, 2)
-    blocked = K._run(g.indptr, g.indices, g.edges, ids, 0, True, True, True, 0.0, 0.0, K.N_EXACT, 2, 32)
-    assert np.array_equal(full, blocked, equal_nan=True)
+    for mode in (C.M_LAZY, C.M_NONLAZY, C.M_LLY):
+        full = C.core_ids(g.indptr, g.indices, g.edges, ids, mode, nchunks=2)[0]
+        blocked = C.core_ids(g.indptr, g.indices, g.edges, ids, mode, nchunks=2, budget=32)[0]
+        assert np.array_equal(full, blocked, equal_nan=True)
 
 
 def test_chunking_and_subsets_do_not_change_values():
     g = _g(nx.random_geometric_graph(250, 0.12, seed=2))
     ids = _all(g)
-    base = K.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 1)
+    base = _production(g, 1)
     for nch in (2, 7, 64):
-        assert np.array_equal(K.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, nch), base,
-                              equal_nan=True)
+        assert np.array_equal(_production(g, nch), base, equal_nan=True)
     sub = np.random.default_rng(0).permutation(ids)[: len(ids) // 3]
-    assert np.array_equal(K.exact_ids(g.indptr, g.indices, g.edges, sub, True, True, True, 3), base[sub],
-                          equal_nan=True)
-    assert K.exact_ids(g.indptr, g.indices, g.edges, ids[:0], True, True, True, 3).shape == (0, K.N_EXACT)
+    v = C.core_ids(g.indptr, g.indices, g.edges, sub, C.M_LAZY, nchunks=3)[0]
+    assert np.array_equal(v, base[sub, 0], equal_nan=True)
+    assert C.core_ids(g.indptr, g.indices, g.edges, ids[:0], C.M_LAZY, nchunks=3)[0].shape == (0,)

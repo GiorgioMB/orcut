@@ -4,7 +4,7 @@ kind of network it covers.
 For random edges and four one-step measures, builds in plain Python: G3, the witness network G^w,
 and the solver's network (relays H1-H4, explicit arcs or witness relays for the remaining pairs),
 each with and without twin merging of rows and with and without the warm start. Runs a line-by-line
-port of orcut._kernels._dinic with shuffled arc orders, and checks
+port of orcut._flow._dinic with shuffled arc orders, and checks
   (a) max flow F = 3A - W1 * scale, against orcut's exact W1 (the network is right);
   (b) at every phase, the distance l <= 24 A / M~ + 1, M~ the flow still missing (the key step);
   (c) phases <= 2 sqrt(24 A) + 1 (the statement);
@@ -54,7 +54,7 @@ def build_csr(net, rng):
     return start, to, cap, rev, fwd
 
 def dinic(nV, start, to, cap, rev, s, t, trace):
-    """Port of orcut._kernels._dinic; appends (level of t, flow at phase start) per phase to trace."""
+    """Port of orcut._flow._dinic; appends (level of t, flow at phase start) per phase to trace."""
     flow = 0
     level = [-1] * nV; it = [0] * nV; path = [0] * nV
     while True:

@@ -7,11 +7,18 @@ from conftest import small_graphs
 import orcut
 from orcut import _oracle as R
 
+MEASURES = {"c_OR": "lazy", "c_OR0": "nonlazy", "c_LLY": "lly"}
+
+
+def _exact(G, which=tuple(MEASURES), edges=None, n_jobs=None):
+    """Lazy, non-lazy and LLY curvatures of the production solver, keyed as in the LP reference."""
+    return {k: orcut.curvature(G, MEASURES[k], edges=edges, n_jobs=n_jobs) for k in which}
+
 
 @pytest.mark.parametrize("G", small_graphs(), ids=lambda g: f"n{g.number_of_nodes()}m{g.number_of_edges()}")
 def test_exact_matches_lp(G, ref):
     g = orcut.api.as_graph(G)
-    ex = orcut.exact(g)
+    ex = _exact(g)
     for e, (i, j) in enumerate(g.edges):
         for key in ("c_OR", "c_OR0", "c_LLY"):
             assert ex[key][e] == pytest.approx(ref(G, int(i), int(j), key), abs=1e-9)
@@ -20,19 +27,19 @@ def test_exact_matches_lp(G, ref):
 def test_subset_matches_full():
     G = nx.convert_node_labels_to_integers(nx.barabasi_albert_graph(80, 3, seed=0))
     g = orcut.api.as_graph(G)
-    full = orcut.exact(g, ("c_OR",))["c_OR"]
+    full = _exact(g, ("c_OR",))["c_OR"]
     ids = np.array([5, 0, 17, 3])
-    assert np.allclose(orcut.exact(g, ("c_OR",), edges=ids)["c_OR"], full[ids])
+    assert np.allclose(_exact(g, ("c_OR",), edges=ids)["c_OR"], full[ids])
 
 
 def test_known_values():
     # complete graph K_n with alpha = 1/n: both measures are uniform on V
-    assert np.allclose(orcut.exact(nx.complete_graph(7))["c_OR"], 1.0)
+    assert np.allclose(_exact(nx.complete_graph(7))["c_OR"], 1.0)
     # hypercube Q_n: LLY curvature 2/n, lazy OR (1 - 1/(n+1)) 2/n, non-lazy 0
-    ex = orcut.exact(nx.convert_node_labels_to_integers(nx.hypercube_graph(4)))
+    ex = _exact(nx.convert_node_labels_to_integers(nx.hypercube_graph(4)))
     assert np.allclose(ex["c_LLY"], 0.5) and np.allclose(ex["c_OR"], 0.4) and np.allclose(ex["c_OR0"], 0.0)
     # long cycles are flat
-    assert np.allclose(orcut.exact(nx.cycle_graph(9))["c_LLY"], 0.0)
+    assert np.allclose(_exact(nx.cycle_graph(9))["c_LLY"], 0.0)
 
 
 def test_closure_on_random_metric_problems():
@@ -63,6 +70,6 @@ def test_closure_on_random_metric_problems():
 
 def test_threads_do_not_change_results():
     G = nx.convert_node_labels_to_integers(nx.random_geometric_graph(120, 0.18, seed=1))
-    a = orcut.exact(G, n_jobs=1)["c_OR"]
-    b = orcut.exact(G, n_jobs=-1)["c_OR"]
+    a = _exact(G, n_jobs=1)["c_OR"]
+    b = _exact(G, n_jobs=-1)["c_OR"]
     assert np.array_equal(a, b)

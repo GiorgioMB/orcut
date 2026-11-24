@@ -221,10 +221,10 @@ def block_e1(R, O: Out):
     O.put("EOneOrtoolsChecked", f_int(chk), "e1: edges compared as exact fractions with OR-Tools")
     O.put("EOneOrtoolsMismatches", f_int(bad), "e1: mismatches with OR-Tools")
     mm = 0
-    for c in ("frozen_mismatch", "oracle_mismatch", "layered_mismatch"):
+    for c in ("oracle_mismatch", "layered_mismatch"):
         if c in d:
             mm += int(np.nansum(d[c].astype(float)))
-    O.put("EOneOracleMismatches", f_int(mm), "e1: mismatches with the frozen kernel, the oracle, the layered closure")
+    O.put("EOneOracleMismatches", f_int(mm), "e1: mismatches with the oracle and the layered closure")
     O.put("EOnePotMaxDiff", f_sci(nanstat(np.nanmax, d["pot_maxdiff"].astype(float))), "e1: max |orcut - POT|")
     O.put("EOneCertChecked", f_int(d["cert_checked"].sum()), "e1: certificates computed")
     O.put("EOneCertFailed", f_int(d["cert_failed"].sum() + d["verify_failed"].sum()), "e1: certificates failed")
@@ -234,7 +234,7 @@ def block_e1(R, O: Out):
     lines = []
     for meas, sub in d.groupby("measure", sort=False):
         mm_ = 0
-        for c in ("frozen_mismatch", "oracle_mismatch", "layered_mismatch"):
+        for c in ("oracle_mismatch", "layered_mismatch"):
             if c in sub:
                 mm_ += int(np.nansum(sub[c].astype(float)))
         pmax = nanstat(np.nanmax, sub["pot_maxdiff"].astype(float)) if sub["pot_maxdiff"].notna().any() else float("nan")

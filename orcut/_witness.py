@@ -25,7 +25,7 @@ from __future__ import annotations
 import numpy as np
 from numba import njit, prange
 
-from ._kernels import INF, _csr, _dinic, _take_i
+from ._flow import INF, _csr, _dinic, _take_i
 from ._base import M_IDLE, M_LAZY, M_LLY, M_NONLAZY, M_WALK, _gcd, _LMAX
 
 W_TWINS = 1    # merge rows with the same relevant neighbourhood
@@ -528,7 +528,7 @@ _DUMMY_I = np.zeros(1, np.int64)
 
 def witness_ids(indptr, indices, edges, ids, mode, pn=0, pd=1, flags=W_ALL, nchunks=None, walk=None):
     """Curvatures of edges[ids] on the witness network: (values, exact W1 (num, den), diagnostics)."""
-    from ._kernels import _ids, _nchunks
+    from ._flow import _ids, _nchunks
 
     if mode == M_WALK:
         if walk is None:

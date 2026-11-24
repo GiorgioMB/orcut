@@ -62,11 +62,6 @@ CONTEXT = [
     ("repository links", r"https?://github\.com/GiorgioMB\b[^\s'\"`)>\]]*", "{url}"),
     # PyPI's page of the package names its authors
     ("package index", r"(?m)^The solver alone is on PyPI as [^\n]*\n\n?", ""),
-    # the frozen kernel's docstring: the earlier paper's code, cited in the third person and unnamed
-    ("own earlier code", r"It is the exact solver of\s+``curvature[\W_]*transfer`` v\d+\s+\([^)]*\),\s+extracted without changes",
-     "It is kept\nwithout changes"),
-    ("own earlier code", r"\s+of\s+``curvature[\W_]*transfer``(?=\.)", ""),
-    ("own earlier code", r"The cascade \(:func:`curvature[\W_]*transfer\.screen`\) now", "The screening cascade now"),
     ("earlier paper", r"\(the code used for the results of Micaletto and\s+Nigrelli,\s+\"[^\"]*\"\)",
      "(the code of an earlier paper)"),
     ("earlier paper", r"\b(?:the|a|our)\s+companion\s+paper\b", "an earlier paper"),

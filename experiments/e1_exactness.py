@@ -88,9 +88,8 @@ def run_graph(spec, rows, a):
     name, g, meta = R.load(spec, a.data_dir)
     ids = np.arange(g.num_edges, dtype=np.int64)
     rng = np.random.default_rng(0)
-    frozen = ref = None  # all edges with the frozen kernel and the oracle: only if a measure they cover is left
+    ref = None  # all edges with the oracle: only if a measure it covers is left
     if {"lazy", "nonlazy", "lly"} & set(todo):
-        frozen = orcut.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
         ref = RF.exact_ids_oracle(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
     for measure in MEASURES:
         cap = a.ortools_cap if measure != "walk" else a.walk_cap
@@ -105,10 +104,9 @@ def run_graph(spec, rows, a):
         val, num, den = out["curvature"], out["w1_num"], out["w1_den"]
         row = dict(graph=name, measure=measure, n=g.num_nodes, m=g.num_edges, deg_max=meta["deg_max"],
                    solve_s=t_solve, nan=int(np.isnan(val).sum()))
-        # frozen 1.0.0 kernel and independent oracle (lazy / non-lazy / LLY)
+        # independent oracle (lazy / non-lazy / LLY)
         col = {"lazy": 0, "nonlazy": 1, "lly": 2}.get(measure)
         if col is not None:
-            row["frozen_mismatch"] = int(np.sum(frozen[:, col] != val))
             row["oracle_mismatch"] = int(np.sum(ref[:, col] != val))
         if measure in ("lazy", "nonlazy"):
             kind = LY.K_LAZY if measure == "lazy" else LY.K_NONLAZY
