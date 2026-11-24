@@ -74,7 +74,13 @@ CONTEXT = [
     # the anonymizer itself is not copied, nor is its archive named
     ("anonymizer", r"(?m)^anonymous\.zip(?:\.tmp)?\n", ""),
     ("copyright", r"Copyright \(c\) (\d{4}) Giorgio Micaletto", r"Copyright (c) \1 Anonymous Authors"),
+    # ICML asks that licenses be removed from submitted code: the LICENSE file is not copied (LICENSES)
+    # and the package metadata stops pointing to it
+    ("license", r"(?m)^license\s*=\s*\{[^}\n]*\}[ \t]*\n", ""),
 ]
+
+# license files: not copied (ICML: "author names and licenses should be removed")
+LICENSES = re.compile(r"(?:^|/)(?:LICEN[CS]E|COPYING)(?:\.[A-Za-z]+)?$")
 
 # Identifying names and what replaces them (applied longest first; the case of each match is kept).
 NAMES = {
@@ -240,6 +246,10 @@ def main() -> None:
     files = [f for f in files if f not in junk]
     if junk:
         print(f"not copied (desktop metadata; untrack it with git rm --cached): {', '.join(junk)}", file=sys.stderr)
+    licenses = [f for f in files if LICENSES.search(f)]
+    files = [f for f in files if f not in licenses]
+    if licenses:
+        print(f"not copied (licenses are removed from submitted code): {', '.join(licenses)}", file=sys.stderr)
     if not files:
         sys.exit("no tracked files: run it inside the git repository")
     entries, counts, leaks = {}, {}, []
