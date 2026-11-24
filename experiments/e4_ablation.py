@@ -13,7 +13,7 @@ estimated from the bin counts. Configurations (``flags`` of :func:`orcut._core.c
   -relays, -twins, -fast, -warm, -witness   full without one step (without relays there are no
              witness relays either)
   witness    the linear-size witness network alone (``orcut._witness``)
-  oracle     explicit local distance matrix and three-level closure (``orcut._reference``,
+  oracle     explicit local distance matrix and three-level closure (``orcut._oracle``,
              the independent test oracle)
   pot        explicit local distance matrix (numba) and POT's network simplex (build included)
   graphflow  min-cost flow on the local graph (Beckmann; OR-Tools), no distance matrix
@@ -60,7 +60,7 @@ def main():
 
     numba.set_num_threads(1)
     common.warm_jit()
-    from orcut import _core as C, _reference as RF
+    from orcut import _core as C, _oracle as RF
 
     rows = Rows(f"{out_dir(a.out, 'e4')}/ablation.csv", ["graph", "config"])
     for spec in a.graphs:
@@ -106,7 +106,7 @@ def main():
                         B.run_graph_flow(g, s, "lazy", budget_s=left, times=t)
                     times.append(t)
             elif cfg == "oracle":
-                f = lambda sub: RF.exact_ids_reference(g.indptr, g.indices, g.edges, sub, True, False, False, 1)
+                f = lambda sub: RF.exact_ids_oracle(g.indptr, g.indices, g.edges, sub, True, False, False, 1)
                 times = [time_per_edge(f, s, reps=1, deadline=deadline) for _, s, _ in strata]
             else:  # pot: build + solve per edge
                 times = []

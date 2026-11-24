@@ -8,14 +8,14 @@ The paper exists in three versions, each a LaTeX project with its own folder of 
 written from the same result tables by
 
 ```bash
-python experiments/paper_dirs.py --results results --out paper   # paper/arXiv, paper/LoG, paper/ICML
+python experiments/paper_dirs.py --results results --out paper   # paper/{arXiv,LoG,ICML}/generated
 ```
 
 | folder | version | figures | solver's name |
 |---|---|---|---|
 | `arXiv/generated` | preprint (`log_2026`, `[preprint]`) | one column of 5.5 in | `orcut` |
 | `LoG/generated` | LoG review (`log_2026`, `[review]`) | one column of 5.5 in | `ours` |
-| `ICML/ICML_generated` | ICML review (`icml2027`) | 3.25 in (main text), 6.75 in (appendix) | `ours` |
+| `ICML/generated` | ICML review (`icml2027`) | 3.25 in (main text), 6.75 in (appendix) | `ours` |
 
 The figures are typeset by LaTeX in Times (`--fonts type1`, the default; it needs `latex` on the
 PATH), so that the PDFs contain Type-1 fonts only, as LoG and ICML require; every figure is checked

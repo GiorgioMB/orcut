@@ -36,7 +36,7 @@ The solver alone is on PyPI as [`faster-or-curvature`](https://pypi.org/project/
 | `orcut/_layered.py` | the layered closure for costs up to D (balls, multi-step walks) |
 | `orcut/certify.py` | certificates (an optimal plan and potential), checked exactly |
 | `orcut/_kernels.py` | the solver of 1.0.0, kept unchanged (`orcut.exact`) |
-| `orcut/_reference.py` | the oracle: explicit distances, three-level closure, its own max flow |
+| `orcut/_oracle.py` | the oracle: explicit distances, three-level closure, its own max flow |
 | `orcut/api.py`, `graph.py`, `measures.py` | entry points, CSR graphs, measures |
 | `tests/` | the kernels against each other, the oracle and linear programming; the theorems, numerically |
 | `experiments/` | E1–E6 of the paper ([experiments/README.md](experiments/README.md)) |

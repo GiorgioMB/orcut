@@ -1,14 +1,14 @@
-"""The production exact solver (orcut._kernels) against the reference solver
-(_reference): different formulation, different distance computation, different
+"""The production exact solver (orcut._kernels) against the oracle
+(orcut._oracle): different formulation, different distance computation, different
 max-flow code, so bit-identical outputs on varied graphs are a strong check.
-The reference itself is checked against linear programming in test_exact.py."""
+The oracle itself is checked against linear programming in test_exact.py."""
 import networkx as nx
 import numpy as np
 import pytest
 
 from orcut import Graph
 from orcut import _kernels as K
-from orcut import _reference as R
+from orcut import _oracle as R
 
 
 def _g(G):
@@ -54,18 +54,18 @@ def _all(g):
 
 @pytest.mark.parametrize("family", sorted(FAMILIES))
 @pytest.mark.parametrize("seed", [0, 1])
-def test_matches_reference_on_random_families(family, seed):
+def test_matches_oracle_on_random_families(family, seed):
     g = _g(FAMILIES[family](seed))
     new = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, True, 3)
-    ref = R.exact_ids_reference(g.indptr, g.indices, g.edges, _all(g), True, True, True, 3)
+    ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, _all(g), True, True, True, 3)
     assert np.array_equal(new, ref, equal_nan=True)
 
 
 @pytest.mark.parametrize("name", sorted(FIXED))
-def test_matches_reference_on_fixed_graphs(name):
+def test_matches_oracle_on_fixed_graphs(name):
     g = _g(FIXED[name])
     new = K.exact_ids(g.indptr, g.indices, g.edges, _all(g), True, True, True, 2)
-    ref = R.exact_ids_reference(g.indptr, g.indices, g.edges, _all(g), True, True, True, 2)
+    ref = R.exact_ids_oracle(g.indptr, g.indices, g.edges, _all(g), True, True, True, 2)
     assert np.array_equal(new, ref, equal_nan=True)
 
 

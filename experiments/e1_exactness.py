@@ -3,7 +3,7 @@
 For every edge of every graph and every measure, the value of orcut is compared, as an exact fraction,
 with an integer min-cost flow (OR-Tools) on the explicit local distance matrix; with POT's network
 simplex (floating point; we report the largest difference); with the independent oracle of
-``orcut._reference`` (full distance matrix, three-level closure, different max-flow code); and with
+``orcut._oracle`` (full distance matrix, three-level closure, different max-flow code); and with
 the layered closure of ``orcut._layered`` (explicit distances, no compression). On a sample of edges,
 ``orcut.certify`` returns an optimal plan and an optimal potential, verified exactly, and
 ``Certificate.verify`` re-checks them from scratch.
@@ -80,7 +80,7 @@ def ortools_fraction(g, e, measure, spec, lp):
 
 def run_graph(spec, rows, a):
     import orcut
-    from orcut import _layered as LY, _reference as RF
+    from orcut import _layered as LY, _oracle as RF
 
     todo = [m for m in MEASURES if not rows.done(graph=R.display(spec), measure=m)]
     if not todo:  # every measure of this graph is in the table: nothing to load or compute
@@ -91,7 +91,7 @@ def run_graph(spec, rows, a):
     frozen = ref = None  # all edges with the frozen kernel and the oracle: only if a measure they cover is left
     if {"lazy", "nonlazy", "lly"} & set(todo):
         frozen = orcut.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
-        ref = RF.exact_ids_reference(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
+        ref = RF.exact_ids_oracle(g.indptr, g.indices, g.edges, ids, True, True, True, 8)
     for measure in MEASURES:
         cap = a.ortools_cap if measure != "walk" else a.walk_cap
         if measure not in todo:

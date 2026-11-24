@@ -1,4 +1,5 @@
-"""Reference exact solver (the previous implementation), kept as a test oracle.
+"""The oracle: an independent exact solver on explicit local distance matrices (Appendix B of the
+paper), used only to check the production solver.
 
 For an edge (i, j) it builds the full local distance matrix on S = N(i) u N(j)
 (entries in {0, 1, 2, 3}, from adjacency and 2-paths), merges twin vertices,
@@ -450,7 +451,7 @@ def exact_one(indptr, indices, i, j, want_or, want_or0, want_lly, scratch, epoch
 
 
 @njit(cache=True, parallel=True)
-def exact_ids_reference(indptr, indices, edges, ids, want_or, want_or0, want_lly, nchunks):
+def exact_ids_oracle(indptr, indices, edges, ids, want_or, want_or0, want_lly, nchunks):
     """Exact curvatures for edges[ids], parallel over chunks; each chunk owns
     an O(n) scratch space."""
     n = indptr.shape[0] - 1

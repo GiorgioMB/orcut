@@ -5,7 +5,7 @@ import pytest
 
 from conftest import small_graphs
 import orcut
-from orcut import _reference as R
+from orcut import _oracle as R
 
 
 @pytest.mark.parametrize("G", small_graphs(), ids=lambda g: f"n{g.number_of_nodes()}m{g.number_of_edges()}")
@@ -36,7 +36,7 @@ def test_known_values():
 
 
 def test_closure_on_random_metric_problems():
-    """The reference solver (w1_closure) against linprog on random graph metrics with random masses."""
+    """The oracle (w1_closure) against linprog on random graph metrics with random masses."""
     from scipy.optimize import linprog
     rng = np.random.default_rng(0)
     for trial in range(40):

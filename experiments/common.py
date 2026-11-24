@@ -169,7 +169,7 @@ def best_of(f, reps: int = 3):
 def warm_jit() -> None:
     """Compile every kernel once (timings exclude JIT compilation)."""
     import orcut
-    from orcut import _core as C, _layered as LY, _reference as RF
+    from orcut import _core as C, _layered as LY, _oracle as RF
 
     g = orcut.Graph.from_edges([(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 0)])
     ids = np.arange(g.num_edges, dtype=np.int64)
@@ -179,7 +179,7 @@ def warm_jit() -> None:
     C.core_ids(g.indptr, g.indices, g.edges, ids, C.M_IDLE, 1, 2, nchunks=1)
     orcut.curvature(g, orcut.Walk(weights=np.ones(g.num_edges, np.int64)))
     orcut.exact_ids(g.indptr, g.indices, g.edges, ids, True, True, True, 1)
-    RF.exact_ids_reference(g.indptr, g.indices, g.edges, ids, True, False, False, 1)
+    RF.exact_ids_oracle(g.indptr, g.indices, g.edges, ids, True, False, False, 1)
     for kind in (LY.K_LAZY, LY.K_BALL, LY.K_WALK_LAZY):
         LY.layered_ids(g.indptr, g.indices, g.edges, ids, kind, 2, True, 1)
 

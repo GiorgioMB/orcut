@@ -4,7 +4,7 @@ Part A: one edge (0, 1) with |U_0| = a, |U_1| = b and t common neighbours, in fi
 distance structure of U_0 x U_1 (``datasets.edge_instance``), over a symmetric sweep (a = b = s,
 t = s / 8) and a hub sweep (a = 32, b = s, t = 4). Every method runs single-threaded on the same
 edge: orcut (``ours``), orcut without witness relays (``nowitness``), the witness network alone
-(``witness``), graph min-cost flow (``graphflow``), the oracle of ``orcut._reference``, and, given
+(``witness``), graph min-cost flow (``graphflow``), the oracle of ``orcut._oracle``, and, given
 the local distance matrix (whose construction is timed as ``build``), POT's network simplex
 (``pot``), ``ot.emd2``, OR-Tools' min-cost flow and HiGHS (LPs of at most ``--highs-max-vars``
 variables). A method whose problem cannot fit in the job's memory is skipped, with the reason in
@@ -108,7 +108,7 @@ def _time_repeated(f, min_total=0.2, max_reps=2000, warm=True):
 
 def part_a(a):
     import orcut
-    from orcut import _core as C, _reference as RF
+    from orcut import _core as C, _oracle as RF
 
     rows = Rows(f"{out_dir(a.out, 'e2')}/controlled.csv", ["sweep", "regime", "s", "seed"])
     sweeps = []
@@ -185,7 +185,7 @@ def part_a(a):
                     elif meth == "graphflow":
                         f = lambda: gp.curvature(int(eid[0]))[0]
                     elif meth == "oracle":
-                        f = lambda: RF.exact_ids_reference(g.indptr, g.indices, g.edges, eid, True, False, False, 1)[0, 0]
+                        f = lambda: RF.exact_ids_oracle(g.indptr, g.indices, g.edges, eid, True, False, False, 1)[0, 0]
                     elif prob is None:  # its dense problem was not built: it cannot fit
                         f = None
                     elif meth == "pot":

@@ -1,7 +1,7 @@
 """Baselines: exact solvers on explicit local distance matrices, graph min-cost flow, GRC, proxies.
 
 ``LocalProblems`` builds the mass-cancelled transport problem of an edge (P x N) with the distance
-kernels of :mod:`orcut._reference`, the fastest input we know how to give a general-purpose solver;
+kernels of :mod:`orcut._oracle`, the fastest input we know how to give a general-purpose solver;
 on it run POT's C++ network simplex (``emd_c``, behind ``ot.emd``), ``ot.emd2`` (what
 GraphRicciCurvature calls), OR-Tools' integer min-cost flow, HiGHS, and entropic OT (POT).
 ``GraphFlowProblems``: W1 as a min-cost flow on the graph itself (Beckmann), with no distance
@@ -22,7 +22,7 @@ from typing import Dict, Optional
 import numpy as np
 from numba import njit, prange
 
-from orcut import _reference as RF
+from orcut import _oracle as RF
 
 
 # ------------------------------------------------------------ local problems
