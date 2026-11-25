@@ -41,3 +41,21 @@ The solver alone is on PyPI as [`faster-or-curvature`](https://pypi.org/project/
 | `tests/` | the kernels against each other, the oracle and linear programming; the theorems, numerically |
 | `experiments/` | E1–E6 of the paper ([experiments/README.md](experiments/README.md)) |
 | `tools/` | `check_formulas.py`, `check_phases.py` (the theorems on larger samples), `provenance.py` (the node behind each row) |
+
+## Citation
+
+The paper: Giorgio Micaletto, *The Min-Cut Formulation of Ollivier–Ricci Curvature*,
+[arXiv:2611.32528](https://arxiv.org/abs/2611.32528), 2026. Tag `v1.4.4` produces every result in it.
+
+```bibtex
+@misc{micaletto2026mincut,
+  author        = {Giorgio Micaletto},
+  title         = {The Min-Cut Formulation of {Ollivier--Ricci} Curvature},
+  year          = {2026},
+  eprint        = {2611.32528},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DS},
+  doi           = {10.48550/arXiv.2611.32528},
+  url           = {https://arxiv.org/abs/2611.32528},
+}
+```

@@ -49,7 +49,7 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SELF = os.path.relpath(os.path.abspath(__file__), ROOT).replace(os.sep, "/")  # not copied: it lists the names
 PKG = None  # in NAMES: the placeholder (--placeholder)
-OWN_ARXIV = ["2603.13535"]  # arXiv identifiers of the authors' papers: links to them are removed
+OWN_ARXIV = ["2603.13535", "2611.32528"]  # the authors' papers (2611.32528: this one): links to them are removed
 ARXIV = r"(?:{})(?:v\d+)?".format("|".join(re.escape(x) for x in OWN_ARXIV))
 CITED_ARXIV: set[str] = set()  # arXiv identifiers of papers by others that the copy may name; any other fails
 BINARY_OK: set[str] = set()    # tracked binary files checked by hand (paths in the repository); any other fails
@@ -62,6 +62,8 @@ CONTEXT = [
     ("repository links", r"https?://github\.com/GiorgioMB\b[^\s'\"`)>\]]*", "{url}"),
     # PyPI's page of the package names its authors
     ("package index", r"(?m)^The solver alone is on PyPI as [^\n]*\n\n?", ""),
+    # the README's citation of this paper (its preprint names the author): the whole section goes
+    ("own preprint", r"(?ms)^## Citation\n.*?(?=^## |\Z)", ""),
     ("earlier paper", r"\(the code used for the results of Micaletto and\s+Nigrelli,\s+\"[^\"]*\"\)",
      "(the code of an earlier paper)"),
     ("earlier paper", r"\b(?:the|a|our)\s+companion\s+paper\b", "an earlier paper"),
