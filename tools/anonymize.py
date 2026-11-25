@@ -81,8 +81,9 @@ CONTEXT = [
     ("license", r"(?m)^license\s*=\s*\{[^}\n]*\}[ \t]*\n", ""),
 ]
 
-# license files: not copied (ICML: "author names and licenses should be removed")
-LICENSES = re.compile(r"(?:^|/)(?:LICEN[CS]E|COPYING)(?:\.[A-Za-z]+)?$")
+# license files: not copied (ICML: "author names and licenses should be removed"); nor is the citation
+# file, which names the author and points to the preprint
+LICENSES = re.compile(r"(?:^|/)(?:(?:LICEN[CS]E|COPYING)(?:\.[A-Za-z]+)?|CITATION\.cff)$")
 
 # Identifying names and what replaces them (applied longest first; the case of each match is kept).
 NAMES = {
@@ -251,7 +252,7 @@ def main() -> None:
     licenses = [f for f in files if LICENSES.search(f)]
     files = [f for f in files if f not in licenses]
     if licenses:
-        print(f"not copied (licenses are removed from submitted code): {', '.join(licenses)}", file=sys.stderr)
+        print(f"not copied (license and citation files name the authors): {', '.join(licenses)}", file=sys.stderr)
     if not files:
         sys.exit("no tracked files: run it inside the git repository")
     entries, counts, leaks = {}, {}, []

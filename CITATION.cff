@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the paper that describes it (preferred-citation).
+  Tag v1.4.4 produces every result in it.
+type: software
+title: "orcut: Exact Ollivier-Ricci curvature with one minimum cut per edge"
+authors:
+  - family-names: Micaletto
+    given-names: Giorgio
+version: 1.4.4
+date-released: "2026-11-22"
+license: MIT
+repository-code: "https://github.com/GiorgioMB/orcut"
+keywords:
+  - ollivier-ricci curvature
+  - optimal transport
+  - minimum cut
+  - graphs
+preferred-citation:
+  type: generic
+  title: "The Min-Cut Formulation of Ollivier-Ricci Curvature"
+  authors:
+    - family-names: Micaletto
+      given-names: Giorgio
+  year: 2026
+  doi: "10.48550/arXiv.2611.32528"
+  url: "https://arxiv.org/abs/2611.32528"
+  notes: "arXiv:2611.32528 [cs.DS]"

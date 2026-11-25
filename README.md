@@ -44,8 +44,8 @@ The solver alone is on PyPI as [`faster-or-curvature`](https://pypi.org/project/
 
 ## Citation
 
-The paper: Giorgio Micaletto, *The Min-Cut Formulation of Ollivier–Ricci Curvature*,
-[arXiv:2611.32528](https://arxiv.org/abs/2611.32528), 2026. Tag `v1.4.4` produces every result in it.
+If you use orcut, please cite the paper that describes it,
+[arXiv:2611.32528](https://arxiv.org/abs/2611.32528) (tag `v1.4.4` produces every result in it):
 
 ```bibtex
 @misc{micaletto2026mincut,
@@ -59,3 +59,5 @@ The paper: Giorgio Micaletto, *The Min-Cut Formulation of Ollivier–Ricci Curva
   url           = {https://arxiv.org/abs/2611.32528},
 }
 ```
+
+GitHub's "Cite this repository" points to the same paper, from `CITATION.cff`.
